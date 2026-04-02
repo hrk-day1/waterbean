@@ -1,2 +1,8 @@
 node_modules
+dist
 .cursor
+.env
+sa.json
+fcws-sheet.json
+.venv
+bak/

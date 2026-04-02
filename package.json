@@ -1,0 +1,21 @@
+{
+  "name": "partner-center",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "web",
+    "waterbean",
+    "api"
+  ],
+  "scripts": {
+    "dev": "run-p dev:*",
+    "dev:web": "npm run dev -w web",
+    "dev:waterbean": "npm run dev -w waterbean",
+    "dev:api": "npm run dev -w api",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "devDependencies": {
+    "npm-run-all2": "^8.0.4"
+  }
+}
