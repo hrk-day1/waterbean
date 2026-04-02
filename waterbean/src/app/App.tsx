@@ -23,7 +23,17 @@ export function App() {
     <div className="mx-auto max-w-5xl p-6">
       <header className="mb-8 flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t("app.title")}</h1>
+          <h1 className="flex items-center gap-1 text-2xl font-bold tracking-tight">
+            <img
+              src="/waterbean_v2.png"
+              alt=""
+              className="h-[1em] w-[1em] shrink-0 object-contain"
+              width={24}
+              height={24}
+              decoding="async"
+            />
+            {t("app.title")}
+          </h1>
           <p className="mt-1 text-sm text-zinc-500">{t("app.description")}</p>
         </div>
         <button
