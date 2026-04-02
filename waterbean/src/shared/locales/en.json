@@ -26,6 +26,7 @@
   "pipeline.domainMode.discovered": "Taxonomy (LLM-discovered domains)",
   "pipeline.hint.discoveredRequiresAll": "Taxonomy mode fixes domain scope to ALL. GEMINI_API_KEY is required.",
   "pipeline.agentProgress.taxonomy": "Taxonomy",
+  "pipeline.agentProgress.taxonomyEvaluator": "Taxonomy Evaluator",
 
   "pipeline.domain.all": "All Domains",
   "pipeline.domain.auth": "Auth",
@@ -55,6 +56,7 @@
   "issues.type.domain_min": "Domain Min",
   "issues.type.coverage": "Coverage",
   "issues.type.duplicate": "Duplicate",
+  "issues.llmJsonDebugTitle": "LLM JSON debug (same as server terminal)",
   "issues.allPassed": "All validations passed",
   "issues.moreItems": "... and {{count}} more",
 

@@ -38,6 +38,8 @@ export interface PipelineResult {
   rounds: number;
   stats: PipelineStats;
   evaluationIssues: EvaluationIssue[];
+  /** API가 LLM JSON 파싱 실패 시 내려줌 */
+  llmJsonFailureLog?: string;
 }
 
 export interface PipelineRequest {
@@ -60,7 +62,7 @@ export interface SkillSummary {
 
 export interface AgentState {
   agentId: string;
-  agentType: "taxonomy" | "plan" | "generator" | "evaluator";
+  agentType: "taxonomy" | "taxonomy-evaluator" | "plan" | "generator" | "evaluator";
   status: "pending" | "running" | "completed" | "failed";
   progress: number;
   message: string;

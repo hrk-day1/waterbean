@@ -31,8 +31,22 @@ export interface GeneratorResult {
   testCases: TestCase[];
 }
 
+export type EvaluationIssueType =
+  | "schema"
+  | "required_field"
+  | "domain_min"
+  | "coverage"
+  | "duplicate"
+  | "taxonomy_domain_count"
+  | "taxonomy_keyword_quality"
+  | "taxonomy_keyword_overlap"
+  | "taxonomy_template_completeness"
+  | "taxonomy_minsets"
+  | "taxonomy_balance"
+  | "taxonomy_llm";
+
 export interface EvaluationIssue {
-  type: "schema" | "required_field" | "domain_min" | "coverage" | "duplicate";
+  type: EvaluationIssueType;
   message: string;
   details?: Record<string, unknown>;
 }
@@ -43,6 +57,12 @@ export interface EvaluationResult {
   issues: EvaluationIssue[];
   uncoveredItems: ChecklistItem[];
   stats: PipelineStats;
+}
+
+export interface TaxonomyEvaluationResult {
+  passed: boolean;
+  issues: EvaluationIssue[];
+  suggestions: string[];
 }
 
 export interface PipelineStats {
@@ -60,4 +80,6 @@ export interface PipelineResult {
   rounds: number;
   stats: PipelineStats;
   evaluationIssues: EvaluationIssue[];
+  /** LLM 응답 JSON 파싱 실패 시 서버가 채움; UI·로컬 디버깅용 (민감 데이터 포함 가능) */
+  llmJsonFailureLog?: string;
 }

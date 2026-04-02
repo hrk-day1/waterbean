@@ -8,6 +8,7 @@ import { orchestrate } from "../agents/orchestrator.js";
 import { eventBus } from "../agents/event-bus.js";
 import { getExecution } from "../agents/store.js";
 import { listAgents } from "../agents/registry.js";
+import { formatLlmJsonFailureForUi, LlmJsonParseError } from "../llm/gemini-client.js";
 
 export const pipelineRouter = Router();
 
@@ -57,7 +58,11 @@ pipelineRouter.post("/run", async (req, res) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[pipeline] error:", err);
-    res.status(500).json({ error: message });
+    const payload: { error: string; llmJsonFailureLog?: string } = { error: message };
+    if (err instanceof LlmJsonParseError) {
+      payload.llmJsonFailureLog = formatLlmJsonFailureForUi(err, 16_000);
+    }
+    res.status(500).json(payload);
   }
 });
 
@@ -72,6 +77,12 @@ pipelineRouter.post("/run/async", (req, res) => {
   const pipelineId = crypto.randomUUID().slice(0, 8);
   void orchestrate(parsed.data, { pipelineId }).catch((err) => {
     console.error("[pipeline/async] error:", err);
+    if (err instanceof Error && err.stack) {
+      console.error(err.stack);
+    }
+    if (err instanceof LlmJsonParseError) {
+      console.error(`[pipeline/async] LLM JSON detail:\n${formatLlmJsonFailureForUi(err, 32_000)}`);
+    }
   });
 
   res.json({ pipelineId, status: "started" });

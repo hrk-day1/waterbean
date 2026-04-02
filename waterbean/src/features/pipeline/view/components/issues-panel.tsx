@@ -79,6 +79,17 @@ export function IssuesPanel({ result }: IssuesPanelProps) {
           </ul>
         </Card>
       )}
+
+      {result.llmJsonFailureLog ? (
+        <Card className="border-warning/40">
+          <h3 className="mb-2 text-sm font-semibold text-warning">
+            {t("issues.llmJsonDebugTitle", "LLM JSON 디버그 (서버 동일 로그)")}
+          </h3>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md bg-zinc-950 p-3 text-xs text-zinc-100">
+            {result.llmJsonFailureLog}
+          </pre>
+        </Card>
+      ) : null}
     </div>
   );
 }

@@ -7,6 +7,7 @@ export function buildTaxonomyPrompt(
   sourceSheetName: string,
   baseSkill: SkillManifest,
 ): string {
+
   const rowsPreview = sampleRows
     .slice(0, 30)
     .map((row, i) => `  행 ${i + 1}: ${JSON.stringify(row)}`)

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { PipelineConfig, PipelineResult, Implementation } from "../types/pipeline.js";
+import type { PipelineConfig, PipelineResult, Implementation, TaxonomyEvaluationResult } from "../types/pipeline.js";
 import type { ChecklistItem, TestCase } from "../types/tc.js";
 import type { EvaluationResult } from "../types/pipeline.js";
 import { parseSpreadsheetUrl, findSheetName, readSheetValues } from "../sheets/reader.js";
@@ -8,6 +8,11 @@ import { env } from "../config/env.js";
 import { getSkill } from "../skills/registry.js";
 import { skillManifestToResolved } from "../skills/resolved-skill.js";
 import { detectHeaderAndData } from "../pipeline/plan.js";
+import {
+  formatLlmJsonFailureForUi,
+  getLlmJsonLogCharLimit,
+  LlmJsonParseError,
+} from "../llm/gemini-client.js";
 import { runTaxonomyPhase } from "./llm-taxonomy-agent.js";
 import { eventBus } from "./event-bus.js";
 import { getAgent } from "./registry.js";
@@ -15,8 +20,13 @@ import { createExecution, updateAgentState, completeExecution } from "./store.js
 import type { PlanInput } from "./deterministic-plan-agent.js";
 import type { GeneratorInput } from "./deterministic-generator-agent.js";
 import type { EvaluatorInput } from "./deterministic-evaluator-agent.js";
+import type { TaxonomyEvaluatorInput } from "./deterministic-taxonomy-evaluator-agent.js";
 
-function failedPipelineResult(targetSheetName: string, message: string): PipelineResult {
+function failedPipelineResult(
+  targetSheetName: string,
+  message: string,
+  opts?: { llmJsonFailureLog?: string },
+): PipelineResult {
   return {
     success: false,
     sheetName: targetSheetName,
@@ -30,6 +40,7 @@ function failedPipelineResult(targetSheetName: string, message: string): Pipelin
       mappingGaps: [],
     },
     evaluationIssues: [{ type: "schema", message }],
+    ...(opts?.llmJsonFailureLog ? { llmJsonFailureLog: opts.llmJsonFailureLog } : {}),
   };
 }
 
@@ -64,7 +75,15 @@ export async function orchestrate(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[orchestrator] pipeline=${pipelineId} failed:`, err);
-    const failure = failedPipelineResult(config.targetSheetName, message);
+    if (err instanceof Error && err.stack) {
+      console.error(err.stack);
+    }
+    if (err instanceof LlmJsonParseError) {
+      const detail = formatLlmJsonFailureForUi(err, getLlmJsonLogCharLimit());
+      process.stderr.write(`\n[orchestrator] ========== LLM JSON FAILURE (copy for debug) ==========\n${detail}\n[orchestrator] ========== END LLM JSON FAILURE ==========\n\n`);
+    }
+    const llmLog = err instanceof LlmJsonParseError ? formatLlmJsonFailureForUi(err, 24_000) : undefined;
+    const failure = failedPipelineResult(config.targetSheetName, message, { llmJsonFailureLog: llmLog });
     completeExecution(pipelineId, failure);
     emitPipelineFinished(pipelineId);
     throw err;
@@ -88,27 +107,59 @@ async function runOrchestrationBody(
     throw new Error(`Source sheet '${sourceSheetName}' has no data rows`);
   }
 
+  const agentConfig = { pipelineId, skillId: config.skillId, domainScope: config.domainScope, implementation: impl };
+
   let resolved = skillManifestToResolved(manifest);
   if (config.domainMode === "discovered") {
     if (!env.geminiApiKey) {
       throw new Error("domainMode 'discovered' requires GEMINI_API_KEY in environment");
     }
     const { headers, dataRows } = detectHeaderAndData(raw);
-    resolved = await runTaxonomyPhase(
-      {
-        headers,
-        sampleRows: dataRows.slice(0, 30),
-        sourceSheetName,
-        baseSkill: manifest,
-      },
-      eventBus,
-      pipelineId,
-    );
+    const sampleRows = dataRows.slice(0, 30);
+    const maxTaxonomyRetries = 2;
+    const taxEvalAgent = getAgent<TaxonomyEvaluatorInput, TaxonomyEvaluationResult>("taxonomy-evaluator", impl);
+
+    for (let attempt = 0; attempt <= maxTaxonomyRetries; attempt++) {
+      resolved = await runTaxonomyPhase(
+        { headers, sampleRows, sourceSheetName, baseSkill: manifest },
+        eventBus,
+        pipelineId,
+      );
+
+      const taxEvalResult = await taxEvalAgent.run(
+        { resolvedSkill: resolved, headers, sampleRows },
+        eventBus,
+        agentConfig,
+      );
+
+      if (taxEvalResult.data?.passed) {
+        updateAgentState(pipelineId, {
+          agentId: taxEvalResult.agentId, agentType: "taxonomy-evaluator",
+          status: "completed", progress: 100,
+          message: "Taxonomy 검증 통과", durationMs: taxEvalResult.durationMs,
+        });
+        break;
+      }
+
+      const issueCount = taxEvalResult.data?.issues.length ?? 0;
+      console.log(
+        `[orchestrator] taxonomy-eval attempt ${attempt + 1}/${maxTaxonomyRetries + 1}: ${issueCount} issues`,
+      );
+
+      if (attempt === maxTaxonomyRetries) {
+        updateAgentState(pipelineId, {
+          agentId: taxEvalResult.agentId, agentType: "taxonomy-evaluator",
+          status: "completed", progress: 100,
+          message: `Taxonomy 검증 미통과 (${issueCount}건), 현재 결과로 계속 진행`,
+          durationMs: taxEvalResult.durationMs,
+        });
+        console.warn(`[orchestrator] taxonomy-eval failed after ${maxTaxonomyRetries + 1} attempts, proceeding with current taxonomy`);
+      }
+    }
   }
 
   // --- Plan ---
   const planAgent = getAgent<PlanInput, ChecklistItem[]>("plan", impl);
-  const agentConfig = { pipelineId, skillId: config.skillId, domainScope: config.domainScope, implementation: impl };
 
   const planResult = await planAgent.run(
     { raw, sourceSheetName, resolvedSkill: resolved },

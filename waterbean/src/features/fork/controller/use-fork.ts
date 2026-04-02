@@ -32,6 +32,7 @@ interface PipelineResult {
   rounds: number;
   stats: PipelineStats;
   evaluationIssues: EvaluationIssue[];
+  llmJsonFailureLog?: string;
 }
 
 export interface ForkVariantResult {
