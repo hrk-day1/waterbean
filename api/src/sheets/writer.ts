@@ -48,13 +48,24 @@ export async function writeHeaders(spreadsheetId: string, sheetName: string) {
   });
 }
 
+export async function clearSheetData(
+  spreadsheetId: string,
+  sheetName: string,
+) {
+  const sheets = await getSheetsClient();
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `${sheetName}!A2:ZZ`,
+  });
+}
+
 export async function writeTestCases(
   spreadsheetId: string,
   sheetName: string,
   testCases: TestCase[],
 ) {
   const sheets = await getSheetsClient();
-  const rows = testCases.map((tc) => TC_COLUMNS.map((col) => tc[col]));
+  const rows = testCases.map((tc) => TC_COLUMNS.map((col) => tc[col] ?? ""));
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE);

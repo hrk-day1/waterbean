@@ -57,9 +57,11 @@ ${existingIssues}
       "severity": "error" | "warning"
     }
   ],
-  "suggestions": ["개선 제안 (한국어)"]
+  "suggestions": ["개선 제안 한 줄", "또 다른 제안"]
 }
 
+- **suggestions**는 **문자열 배열만** 허용. 각 원소는 한 줄 이상 가능한 평문 문자열.
+- **금지**: 단일 긴 문자열 하나만 넣기(\`"suggestions": "문단..."\`). **금지**: \`[{"suggestion":"..."}]\` 형태의 객체 배열.
 - passed가 false인 경우: 도메인 재생성이 필요한 심각한 문제가 있을 때만
 - severity가 "warning"인 이슈는 passed를 false로 만들지 않습니다
 - issues와 suggestions는 한국어로 작성하세요`;

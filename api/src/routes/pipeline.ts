@@ -29,6 +29,7 @@ const RunRequestSchema = z
     skillId: z.string().default("default"),
     implementation: z.enum(["deterministic", "llm"]).default("llm"),
     maxLlmRounds: z.number().int().min(0).max(5).default(3),
+    mergeSimilarTestCases: z.boolean().default(false),
   })
   .superRefine((val, ctx) => {
     if (val.domainMode === "discovered" && val.domainScope !== "ALL") {

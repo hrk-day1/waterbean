@@ -1,32 +1,121 @@
-import type { ChecklistItem } from "../../types/tc.js";
-import type { TcTemplate } from "../../skills/types.js";
+import type { ChecklistItem, TestPoint } from "../../types/tc.js";
 import type { ResolvedSkill } from "../../skills/resolved-skill.js";
+import type { PolicyHint } from "../../skills/types.js";
 import { TC_TYPES } from "../../types/tc.js";
+import { TC_KEY_MAP, keyMappingTable, compactFieldList } from "../key-mapping.js";
 
-function formatTemplateExamples(templates: TcTemplate[], limit = 3): string {
-  return templates
-    .slice(0, limit)
-    .map(
-      (t) =>
-        `  - Type: ${t.type}, 시나리오: "${t.scenarioSuffix}", 사전조건: "${t.precondition}", 단계: "${t.steps}", 기대결과: "${t.expectedResult}"`,
-    )
-    .join("\n");
+interface ChecklistWithTestPoints {
+  item: ChecklistItem;
+  testPoints: TestPoint[];
+}
+
+function formatTestPointsForPrompt(entries: ChecklistWithTestPoints[]): string {
+  return entries.map((e) => {
+    const tpList = e.testPoints
+      .map((tp) => `    - [${tp.pointType}] ${tp.intent} (Type: ${tp.suggestedTcType}, required: ${tp.required})`)
+      .join("\n");
+    return `  기능: "${e.item.feature}"
+  요구사항ID: ${e.item.requirementId}
+  설명: ${e.item.description}
+  기능유형: ${(e.item.featureTypes ?? []).join(", ") || "미분류"}
+  사전조건(짧게): ${e.item.precondition || "없음"}
+  원본: R${e.item.sourceRow}
+  테스트 포인트:
+${tpList}`;
+  }).join("\n\n");
 }
 
 export function buildGeneratorPrompt(
   checklist: ChecklistItem[],
   domain: string,
   resolved: ResolvedSkill,
-  config: { ownerDefault: string; environmentDefault: string },
+  config: { ownerDefault: string; environmentDefault: string; maxTcPerRequirement?: number },
+  startTcId: number,
+  testPointMap?: Map<string, TestPoint[]>,
+): string {
+  const entries: ChecklistWithTestPoints[] = checklist.map((item) => ({
+    item,
+    testPoints: testPointMap?.get(item.id) ?? [],
+  }));
+
+  const hasTestPoints = entries.some((e) => e.testPoints.length > 0);
+
+  if (hasTestPoints) {
+    return buildFeatureDrivenPrompt(entries, domain, config, startTcId, resolved.policyHints ?? []);
+  }
+
+  return buildLegacyPrompt(checklist, domain, resolved, config, startTcId);
+}
+
+function formatPolicyHints(hints: PolicyHint[], domain: string): string {
+  const relevant = hints.filter((h) => h.domain === domain || h.domain === "_common");
+  if (relevant.length === 0) return "";
+
+  const lines = relevant
+    .map((h) => `  - [${h.riskLevel ?? "medium"}] ${h.hint}`)
+    .join("\n");
+  return `\n## 도메인 정책 힌트 (${domain})\n아래 리스크 관점을 TC 작성 시 참고하세요. 해당되는 기능이 있으면 Test_Steps나 Expected_Result에 반영하세요.\n${lines}\n`;
+}
+
+function buildFeatureDrivenPrompt(
+  entries: ChecklistWithTestPoints[],
+  domain: string,
+  config: { ownerDefault: string; environmentDefault: string; maxTcPerRequirement?: number },
+  startTcId: number,
+  policyHints: PolicyHint[] = [],
+): string {
+  const policySection = formatPolicyHints(policyHints, domain);
+
+  return `당신은 시니어 QA 엔지니어입니다. "${domain}" 도메인의 기능별 테스트 포인트를 기반으로 실무용 테스트 케이스를 생성하세요.
+
+## 언어 규칙
+- Scenario, Precondition, Test_Steps, Test_Data, Expected_Result, Notes(작성 시) 등 **자연어 필드는 반드시 한국어**로 작성하세요.
+- TC_ID, Feature, Requirement_ID, Type, Priority, Severity 등 고정 필드는 영문 규격을 유지합니다.
+
+## 허용 TC Type
+${JSON.stringify([...TC_TYPES])}
+${policySection}
+## 기능별 테스트 포인트
+아래 각 기능의 테스트 포인트를 기반으로 TC를 생성하세요.
+각 테스트 포인트가 하나의 TC가 됩니다. 포인트의 intent를 반영하여 구체적인 Test_Steps와 Expected_Result를 작성하세요.
+
+${formatTestPointsForPrompt(entries)}
+
+## 규칙
+1. 각 테스트 포인트당 **정확히 1건**의 TC를 생성하세요.
+2. TC_ID는 "TC-XXXX" 형식이며 TC-${String(startTcId).padStart(4, "0")}부터 시작합니다.
+3. Scenario: **Feature 컬럼과 동일한 기능명/경로를 다시 넣지 마세요.** intent만 반복하지 말고, 검증 초점이 **설명(스펙)**의 어떤 내용과 연결되는지 한국어 **한 문장**으로 쓰세요.
+4. **설명**에 나온 UI 요소·필드·상태·예외 문구를 Test_Steps에 구체적으로 녹이세요(가능하면 2~4단계). **로그인, 메뉴/탭 이동, 단순 화면 진입**은 Test_Steps에 반복하지 말고 **Precondition**에만 두세요.
+5. **Precondition**: **짧게**만 씁니다(문장 서술 금지 권장). 역할·계정·초기 화면 상태를 **키워드·슬래시·구분자**로 한 줄에 (~80자내 권장). 예: \`운영자 / 멤버십상품추가 화면\`, \`권한O·데이터 있음\`
+6. Expected_Result: 측정 가능한 관찰 결과(화면·데이터·메시지)로 쓰고, 테스트 포인트 intent를 검증 가능하게 구체화하세요. **Scenario와 동일 문장을 복붙하지 마세요.** 나쁜 예: "정상 조회 시 올바른 결과"만 반복 / 좋은 예: 스펙에 적힌 필드명·조건을 Expected에 명시.
+7. Priority는 P0/P1/P2, Severity는 S1/S2/S3 중 하나입니다.
+8. Environment: "${config.environmentDefault}", Owner: "${config.ownerDefault}", Status: "Draft", Automation_Candidate: "N".
+9. Traceability는 "R{sourceRow}" 형식으로 원본 행 번호만 참조하세요.
+10. 이미 의미가 같은 시나리오를 표현만 바꿔 중복 생성하지 마세요.
+11. Notes(${TC_KEY_MAP.Notes})는 기본적으로 생략하세요. 특이사항(예: 가정/제약/추가 확인 필요)이 있을 때만 작성하세요.
+
+## 출력 형식
+토큰 절약을 위해 **축약 키**를 사용하세요.
+키 매핑: ${keyMappingTable(TC_KEY_MAP)}
+
+아래 축약 키를 가진 JSON 배열을 반환하세요:
+${compactFieldList(TC_KEY_MAP)}
+
+유효한 JSON 배열만 반환하세요. 마크다운 펜스나 설명은 포함하지 마세요.`;
+}
+
+function buildLegacyPrompt(
+  checklist: ChecklistItem[],
+  domain: string,
+  resolved: ResolvedSkill,
+  config: { ownerDefault: string; environmentDefault: string; maxTcPerRequirement?: number },
   startTcId: number,
 ): string {
-  const domainTemplates = resolved.templates[domain] ?? [];
-  const minSet = resolved.domainMinSets[domain] ?? {};
-
   const checklistJson = checklist.map((c) => ({
     requirementId: c.requirementId,
     feature: c.feature,
     description: c.description,
+    featureTypes: c.featureTypes ?? [],
     sourceRow: c.sourceRow,
     sourceSheet: c.sourceSheet,
   }));
@@ -34,16 +123,8 @@ export function buildGeneratorPrompt(
   return `당신은 시니어 QA 엔지니어입니다. "${domain}" 도메인에 대한 테스트 케이스를 생성하세요.
 
 ## 언어 규칙
-- Scenario, Precondition, Test_Steps, Test_Data, Expected_Result, Notes 등 **자연어 필드는 반드시 한국어**로 작성하세요.
+- Scenario, Precondition, Test_Steps, Test_Data, Expected_Result, Notes(작성 시) 등 **자연어 필드는 반드시 한국어**로 작성하세요.
 - TC_ID, Feature, Requirement_ID, Type, Priority, Severity 등 고정 필드는 영문 규격을 유지합니다.
-
-## 참고 예시 (스킬 템플릿)
-${formatTemplateExamples(domainTemplates, 5)}
-
-## 도메인 최소 세트 요구사항
-${Object.keys(minSet).length
-    ? Object.entries(minSet).map(([type, count]) => `  - ${type}: 최소 ${count}건`).join("\n")
-    : "  - (해당 도메인에 별도 최소 세트 없음)"}
 
 ## 허용 TC Type
 ${JSON.stringify([...TC_TYPES])}
@@ -53,17 +134,25 @@ ${JSON.stringify(checklistJson, null, 2)}
 
 ## 규칙
 1. 위 체크리스트 항목을 **모두** 커버하는 TC를 생성하세요.
-2. TC_ID는 "TC-XXXX" 형식이며 TC-${String(startTcId).padStart(4, "0")}부터 시작합니다.
-3. Scenario 필드는 "[기능명] " 뒤에 테스트 시나리오를 한국어로 작성하세요.
-4. Priority는 P0/P1/P2, Severity는 S1/S2/S3 중 하나입니다.
-5. Environment: "${config.environmentDefault}", Owner: "${config.ownerDefault}", Status: "Draft", Automation_Candidate: "N".
-6. Traceability는 "{sourceSheet}!R{sourceRow}" 형식으로 원본을 참조하세요.
-7. 매핑이 불확실한 항목은 Notes에 "MAPPING_GAP:Feature" 또는 "MAPPING_GAP:Requirement_ID"를 추가하세요.
-8. 도메인 최소 세트 요구사항을 충족하세요.
+2. 각 항목의 featureTypes(기능 유형)를 참고하여 해당 기능에 적합한 테스트 시나리오를 작성하세요.
+3. TC_ID는 "TC-XXXX" 형식이며 TC-${String(startTcId).padStart(4, "0")}부터 시작합니다.
+4. Scenario: **Feature와 중복되는 기능명 접두어를 붙이지 마세요.** intent만 반복하지 말고, **description(스펙)**과 연결되는 검증 초점을 한국어 한 문장으로 쓰세요.
+5. Test_Steps: 실무에서 바로 실행 가능한 구체적 절차. **description**의 UI·필드·상태·예외를 반영하세요. 로그인·메뉴 이동·단순 진입은 Feature로 유추되면 **Precondition**에만 두고 Steps에서 반복하지 마세요.
+6. **Precondition**: **짧게**만(키워드·한 줄, ~80자 권장). 문장형 장문 금지. 예: \`크리에이터권한 / 상품추가 화면\`
+7. Expected_Result: 화면·데이터·메시지 등 관찰 가능한 결과로 쓰고, **Scenario와 동일 문장 복붙 금지.** 스펙의 필드명·조건을 구체화하세요.
+8. Priority는 P0/P1/P2, Severity는 S1/S2/S3 중 하나입니다.
+9. Environment: "${config.environmentDefault}", Owner: "${config.ownerDefault}", Status: "Draft", Automation_Candidate: "N".
+10. Traceability는 "R{sourceRow}" 형식으로 원본 행 번호만 참조하세요.
+11. 한 Requirement_ID에 대해 생성할 TC는 최대 ${config.maxTcPerRequirement ?? 2}건입니다.
+12. 이미 의미가 같은 시나리오를 표현만 바꿔 중복 생성하지 마세요.
+13. Notes(${TC_KEY_MAP.Notes})는 기본적으로 생략하세요. 특이사항이 있는 경우에만 작성하세요.
 
 ## 출력 형식
-아래 필드를 가진 JSON 배열을 반환하세요:
-TC_ID, Feature, Requirement_ID, Scenario, Precondition, Test_Steps, Test_Data, Expected_Result, Priority, Severity, Type, Environment, Owner, Status, Automation_Candidate, Traceability, Notes
+토큰 절약을 위해 **축약 키**를 사용하세요.
+키 매핑: ${keyMappingTable(TC_KEY_MAP)}
+
+아래 축약 키를 가진 JSON 배열을 반환하세요:
+${compactFieldList(TC_KEY_MAP)}
 
 유효한 JSON 배열만 반환하세요. 마크다운 펜스나 설명은 포함하지 마세요.`;
 }

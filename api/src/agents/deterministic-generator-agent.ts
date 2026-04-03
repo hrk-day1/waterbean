@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { ChecklistItem, TestCase } from "../types/tc.js";
 import type { ResolvedSkill } from "../skills/resolved-skill.js";
-import { generateTestCases } from "../pipeline/generator.js";
+import { generateTestCasesFromTestPoints } from "../pipeline/generator.js";
 import type { Agent } from "./registry.js";
 import type { AgentResult, SubAgentConfig } from "./types.js";
 import type { eventBus } from "./event-bus.js";
@@ -25,16 +25,16 @@ export class DeterministicGeneratorAgent implements Agent<GeneratorInput, TestCa
 
     bus.emit(config.pipelineId, {
       agentId, agentType: "generator", status: "running", progress: 0,
-      message: `템플릿 기반 TC 생성 중 (${input.checklist.length}건)...`,
+      message: `기능 기반 TC 생성 중 (${input.checklist.length}건)...`,
       timestamp: new Date().toISOString(),
     });
 
     try {
-      const testCases = generateTestCases(input.checklist, input.config, input.resolvedSkill);
+      const testCases = generateTestCasesFromTestPoints(input.checklist, input.config, input.resolvedSkill);
 
       bus.emit(config.pipelineId, {
         agentId, agentType: "generator", status: "completed", progress: 100,
-        message: `${testCases.length}건 TC 생성 완료`,
+        message: `${testCases.length}건 TC 생성 완료 (test point 기반)`,
         timestamp: new Date().toISOString(),
       });
 

@@ -6,3 +6,4 @@ sa.json
 fcws-sheet.json
 .venv
 bak/
+.pipeline-debug/

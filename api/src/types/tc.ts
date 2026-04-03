@@ -46,6 +46,22 @@ export const DOMAINS = [
 
 export type Domain = (typeof DOMAINS)[number];
 
+export const FEATURE_TYPES = [
+  "조회",
+  "등록",
+  "수정",
+  "삭제",
+  "상태전이",
+  "승인반려",
+  "권한제어",
+  "파일처리",
+  "결제금액",
+  "스케줄배치",
+  "외부연동",
+] as const;
+
+export type FeatureType = (typeof FEATURE_TYPES)[number];
+
 export interface TestCase {
   TC_ID: string;
   Feature: string;
@@ -63,7 +79,8 @@ export interface TestCase {
   Status: string;
   Automation_Candidate: string;
   Traceability: string;
-  Notes: string;
+  /** 특이사항이 있을 때만 작성 */
+  Notes?: string;
 }
 
 export interface ChecklistItem {
@@ -76,6 +93,21 @@ export interface ChecklistItem {
   sourceRow: number;
   sourceSheet: string;
   covered: boolean;
+  /** @migration Phase 2 이후 FeatureItem으로 분리 예정 */
+  featureTypes?: FeatureType[];
+  /** @migration Phase 2 이후 FeatureItem으로 분리 예정 */
+  precondition?: string;
+  /** @migration Phase 2 이후 FeatureItem으로 분리 예정 — 대분류 > 중분류 > 소분류 */
+  categoryPath?: string;
+}
+
+export interface TestPoint {
+  id: string;
+  featureItemId: string;
+  pointType: string;
+  intent: string;
+  suggestedTcType: TcType;
+  required: boolean;
 }
 
 /** @deprecated domainMinSets는 이제 SkillManifest JSON에서 관리됩니다 (api/src/skills/presets/*.json) */

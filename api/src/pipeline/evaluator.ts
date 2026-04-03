@@ -1,11 +1,15 @@
-import type { ChecklistItem, TcType, TestCase } from "../types/tc.js";
+import type { ChecklistItem, TcType, TestCase, TestPoint } from "../types/tc.js";
 import { TC_TYPES } from "../types/tc.js";
 import type { EvaluationIssue, EvaluationResult, PipelineStats } from "../types/pipeline.js";
 import type { ResolvedSkill } from "../skills/resolved-skill.js";
+import { isPipelineGlobalCommonTc } from "./generator.js";
+import { deriveTestPointsForChecklist } from "./test-points.js";
 
 const VALID_PRIORITIES = new Set(["P0", "P1", "P2"]);
 const VALID_SEVERITIES = new Set(["S1", "S2", "S3"]);
 const VALID_TYPES = new Set<string>(TC_TYPES);
+
+const BLOCKING_ISSUE_TYPES = new Set(["schema", "required_field", "coverage", "test_point_missing"]);
 
 export function evaluate(
   checklist: ChecklistItem[],
@@ -18,12 +22,15 @@ export function evaluate(
   validateRequiredFields(testCases, issues);
   const domainDist = validateDomainMinSets(testCases, issues, resolved);
   const uncoveredItems = validateCoverage(checklist, testCases, issues);
+  validateTestPointCoverage(checklist, testCases, issues);
   validateDuplicates(testCases, issues);
 
   const stats = buildStats(testCases, domainDist, checklist);
 
+  const hasBlockingIssues = issues.some((i) => BLOCKING_ISSUE_TYPES.has(i.type));
+
   return {
-    passed: issues.length === 0 && uncoveredItems.length === 0,
+    passed: !hasBlockingIssues && uncoveredItems.length === 0,
     totalTCs: testCases.length,
     issues,
     uncoveredItems,
@@ -110,6 +117,7 @@ function validateDomainMinSets(
   );
 
   for (const tc of testCases) {
+    if (isPipelineGlobalCommonTc(tc)) continue;
     const domain = inferDomainFromTc(tc, patterns, resolved);
     domainDist[domain] = (domainDist[domain] ?? 0) + 1;
     if (!counts[domain]) counts[domain] = emptyTypeCounts();
@@ -135,12 +143,16 @@ function validateDomainMinSets(
   return domainDist;
 }
 
+function splitReqIds(raw: string): string[] {
+  return raw.split(",").map((id) => id.trim()).filter(Boolean);
+}
+
 function validateCoverage(
   checklist: ChecklistItem[],
   testCases: TestCase[],
   issues: EvaluationIssue[],
 ): ChecklistItem[] {
-  const coveredReqIds = new Set(testCases.map((tc) => tc.Requirement_ID));
+  const coveredReqIds = new Set(testCases.flatMap((tc) => splitReqIds(tc.Requirement_ID)));
   const uncovered = checklist.filter((item) => !coveredReqIds.has(item.requirementId));
 
   for (const item of uncovered) {
@@ -154,19 +166,83 @@ function validateCoverage(
   return uncovered;
 }
 
+function normalizeText(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 function validateDuplicates(testCases: TestCase[], issues: EvaluationIssue[]) {
   const seen = new Map<string, string>();
 
   for (const tc of testCases) {
-    const key = `${tc.Requirement_ID}|${tc.Scenario.toLowerCase().replace(/\s+/g, " ").trim()}`;
-    const existing = seen.get(key);
+    const feature = normalizeText(tc.Feature);
+    const scenario = normalizeText(tc.Scenario);
+    const dupKey = `${feature}|${scenario}|${tc.Type}`;
+    const existing = seen.get(dupKey);
     if (existing) {
       issues.push({
         type: "duplicate",
-        message: `${tc.TC_ID}와 ${existing}가 중복 (${tc.Requirement_ID})`,
+        message: `${tc.TC_ID}와 ${existing}가 중복 (기능: ${tc.Feature})`,
       });
     } else {
-      seen.set(key, tc.TC_ID);
+      seen.set(dupKey, tc.TC_ID);
+    }
+  }
+}
+
+function testPointMatchesTc(tp: TestPoint, tc: TestCase): boolean {
+  const scenarioLower = tc.Scenario.toLowerCase();
+  const expectedLower = tc.Expected_Result.toLowerCase();
+  const combined = `${scenarioLower} ${expectedLower}`;
+
+  const intentWords = tp.intent.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  const matchedWords = intentWords.filter((w) => combined.includes(w));
+  if (matchedWords.length >= Math.ceil(intentWords.length * 0.4)) return true;
+
+  const pointTypeLower = tp.pointType.toLowerCase();
+  if (combined.includes(pointTypeLower)) return true;
+
+  return false;
+}
+
+function validateTestPointCoverage(
+  checklist: ChecklistItem[],
+  testCases: TestCase[],
+  issues: EvaluationIssue[],
+): void {
+  const testPointMap = deriveTestPointsForChecklist(checklist, true);
+
+  const tcByReqId = new Map<string, TestCase[]>();
+  for (const tc of testCases) {
+    for (const reqId of splitReqIds(tc.Requirement_ID)) {
+      const list = tcByReqId.get(reqId) ?? [];
+      list.push(tc);
+      tcByReqId.set(reqId, list);
+    }
+  }
+
+  for (const item of checklist) {
+    const points = testPointMap.get(item.id) ?? [];
+    const requiredPoints = points.filter((p) => p.required);
+    if (requiredPoints.length === 0) continue;
+
+    const itemTcs = tcByReqId.get(item.requirementId) ?? [];
+    if (itemTcs.length === 0) continue;
+
+    for (const tp of requiredPoints) {
+      const covered = itemTcs.some((tc) => testPointMatchesTc(tp, tc));
+      if (!covered) {
+        issues.push({
+          type: "test_point_missing",
+          message: `${item.requirementId}: 기능 '${item.feature}'에서 필수 테스트 포인트 '${tp.pointType}' 누락 — ${tp.intent}`,
+          details: {
+            checklistId: item.id,
+            requirementId: item.requirementId,
+            feature: item.feature,
+            pointType: tp.pointType,
+            intent: tp.intent,
+          },
+        });
+      }
     }
   }
 }
@@ -182,14 +258,28 @@ function buildStats(
   };
   const coverageGaps: string[] = [];
   const mappingGaps: string[] = [];
+  const mappingGapSeen = new Set<string>();
 
   for (const tc of testCases) {
     if (tc.Priority in priorityDist) priorityDist[tc.Priority as keyof typeof priorityDist]++;
     if (tc.Type in typeDist) typeDist[tc.Type]++;
-    if (tc.Notes.includes("MAPPING_GAP")) mappingGaps.push(`${tc.TC_ID}: ${tc.Notes}`);
+
+    const reasons: string[] = [];
+    if (tc.Feature === "UNKNOWN_FEATURE") reasons.push("Feature");
+
+    const reqIds = splitReqIds(tc.Requirement_ID);
+    if (reqIds.some((id) => id.startsWith("AUTO-"))) reasons.push("Requirement_ID");
+
+    if (reasons.length > 0) {
+      const message = `${tc.TC_ID}: MAPPING_GAP:${reasons.join(",")}`;
+      if (!mappingGapSeen.has(message)) {
+        mappingGapSeen.add(message);
+        mappingGaps.push(message);
+      }
+    }
   }
 
-  const coveredReqIds = new Set(testCases.map((tc) => tc.Requirement_ID));
+  const coveredReqIds = new Set(testCases.flatMap((tc) => splitReqIds(tc.Requirement_ID)));
   for (const item of checklist) {
     if (!coveredReqIds.has(item.requirementId)) {
       coverageGaps.push(`${item.requirementId}: ${item.description}`);

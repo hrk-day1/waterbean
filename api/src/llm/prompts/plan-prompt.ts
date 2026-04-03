@@ -1,55 +1,88 @@
 import type { ResolvedSkill } from "../../skills/resolved-skill.js";
+import type { TcSourceFieldRow } from "../../pipeline/plan.js";
+import { FEATURE_TYPES } from "../../types/tc.js";
+import { PLAN_KEY_MAP, keyMappingTable } from "../key-mapping.js";
 
-export function buildPlanPrompt(
-  headers: string[],
-  sampleRows: string[][],
-  sourceSheetName: string,
-  resolved: ResolvedSkill,
-): string {
+/**
+ * 청크마다 동일하게 붙는 공통 프롬프트(규칙·도메인·출력 스키마).
+ * LLM plan 병렬 청크 호출 시 1회만 생성해 재사용한다.
+ */
+export function buildPlanPromptPrefix(resolved: ResolvedSkill): string {
   const domainKeywordsSection = resolved.domainOrder
     .map((d) => `  - ${d}: ${(resolved.domainKeywords[d] ?? []).join(", ")}`)
     .join("\n");
 
-  const rowsPreview = sampleRows
-    .slice(0, 30)
-    .map((row, i) => `  행 ${i + 1}: ${JSON.stringify(row)}`)
-    .join("\n");
-
-  return `당신은 시니어 QA 분석가입니다. 아래 스프레드시트 데이터를 분석하여 구조화된 체크리스트를 작성하세요.
+  return `당신은 시니어 QA 분석가입니다. 스프레드시트 데이터를 분석해 구조화된 체크리스트를 작성하세요.
 
 ## 언어 규칙
-- description, feature 등 자연어 필드는 **반드시 한국어**로 작성하세요.
-- 필드명(id, requirementId 등)과 domain 값(아래 허용 id)은 영문 slug로 유지합니다.
+- description, feature 등 자연어는 **한국어**. 필드 축약 키·domain 값은 지시에 따름.
+- featureTypes는 아래 허용 목록의 한국어 값만 사용.
 
 ## 작업
-1. 컬럼 중 기능명, 분류(대분류/중분류/소분류), 요구사항 ID, 시나리오/설명, 사전조건에 해당하는 열을 식별하세요.
-2. 각 데이터 행마다 올바른 도메인을 분류하여 ChecklistItem을 만드세요.
-3. 분류 컬럼은 ">" 구분자로 하나의 feature 필드에 합치세요 (예: "중분류 > 소분류 > 기능명").
-4. 요구사항 ID 컬럼이 없으면 "AUTO-{행번호}" 형식으로 생성하세요.
+1. **입력은 이미 아래 필드만 추출된 값입니다:** 대분류, 중분류, 소분류, 기능명, 기능설명. (비고·의견·확인필요·담당자 등 다른 열은 포함되지 않음) **중분류·소분류 열이 원본 시트에 없으면 빈 문자열로 옵니다.**
+2. 행마다 도메인 분류 후 ChecklistItem 생성.
+3. 분류·기능명은 ">" 로 feature에 합침 (예: "대분류 > 기능명" 또는 "대분류 > 중분류 > 소분류 > 기능명"). **빈 분류는 생략.**
+4. **description**은 **기능설명** 필드만 사용. 다른 텍스트를 임의로 추가하지 않음.
+5. 요구사항 ID 열이 이번 입력에 없음 → requirementId는 항상 "AUTO-{행번호}".
+6. featureTypes는 의미에 맞게 1개 이상(복수 가능).
+7. **precondition은 비움(생략).** 이 프롬프트에는 사전조건 열이 없음.
+8. categoryPath는 대분류 > 중분류 > 소분류 중 **값이 있는 것만** 이어 붙임(중·소 열이 없거나 비어 있으면 생략).
 
-## 도메인 분류 키워드
+## 기능 유형 (featureTypes)
+허용: ${JSON.stringify([...FEATURE_TYPES])}
+기준: 조회=목록·상세·검색·필터 | 등록=추가·작성 | 수정=편집 | 삭제=제거·해지 | 상태전이=공개/활성 등 전환 | 승인반려 | 권한제어 | 파일처리 | 결제금액 | 스케줄배치 | 외부연동
+
+## 도메인 키워드
 ${domainKeywordsSection}
+미매칭 시 "${resolved.fallbackDomain}".
 
-키워드가 일치하지 않으면 "${resolved.fallbackDomain}"(기본 도메인)으로 분류합니다.
+아래 "데이터 행" 블록은 **이번 요청 배치에 해당하는 행만** 포함합니다. 해당 행만 JSON 배열로 출력하세요.
+`;
+}
 
-## 시트: "${sourceSheetName}"
+export function buildPlanPromptChunkBody(
+  sourceSheetName: string,
+  rows: { sourceRow: number; fields: TcSourceFieldRow }[],
+): string {
+  const rowsPreview = rows
+    .map((r) => `  행 ${r.sourceRow}: ${JSON.stringify(r.fields)}`)
+    .join("\n");
 
-### 헤더
-${JSON.stringify(headers)}
-
-### 샘플 행 (최대 30건)
+  return `## 시트: "${sourceSheetName}"
+### 데이터 행 (TC 소스 필드만: 대분류, 중분류, 소분류, 기능명, 기능설명)
 ${rowsPreview}
+`;
+}
 
-## 출력 형식
-아래 필드를 가진 JSON 배열을 반환하세요:
-- id: string ("CL-XXXX" 형식, XXXX는 행 번호 zero-padded)
-- requirementId: string
-- feature: string (한국어)
-- domain: ${JSON.stringify([...resolved.domainOrder])} 중 정확히 하나
-- description: string (테스트 가능한 한국어 시나리오 문장)
-- sourceRow: number (원본 시트 기준 1-based 행 번호, 헤더 오프셋 포함)
-- sourceSheet: "${sourceSheetName}"
-- covered: false
+export function buildPlanPromptSuffix(
+  resolved: ResolvedSkill,
+  sourceSheetName: string,
+): string {
+  return `## 출력 형식
+축약 키 사용. 매핑: ${keyMappingTable(PLAN_KEY_MAP)}
+- ${PLAN_KEY_MAP.id}: "CL-XXXX"
+- ${PLAN_KEY_MAP.requirementId}: string
+- ${PLAN_KEY_MAP.feature}: string (한국어)
+- ${PLAN_KEY_MAP.domain}: ${JSON.stringify([...resolved.domainOrder])} 중 하나
+- ${PLAN_KEY_MAP.description}: **반드시 하나의 문자열**. 여러 줄 설명은 \\n으로 이어 붙임. **JSON 배열 금지**(잘못된 예: ["줄1","줄2"])
+- ${PLAN_KEY_MAP.sourceRow}: 위 "행 N:" 번호 그대로
+- ${PLAN_KEY_MAP.sourceSheet}: "${sourceSheetName}"
+- ${PLAN_KEY_MAP.covered}: false
+- ${PLAN_KEY_MAP.featureTypes}: optional, **반드시 문자열 배열** (예: ["조회"]). 단일 문자열 "조회"만 쓰지 말 것
+- ${PLAN_KEY_MAP.precondition}: 생략(이 입력에는 사전조건 없음)
+- ${PLAN_KEY_MAP.categoryPath}: optional
 
-유효한 JSON 배열만 반환하세요. 마크다운 펜스나 설명은 포함하지 마세요.`;
+유효한 JSON 배열만. 마크다운 펜스·설명 금지.`;
+}
+
+export function buildPlanPrompt(
+  sourceSheetName: string,
+  resolved: ResolvedSkill,
+  rows: { sourceRow: number; fields: TcSourceFieldRow }[],
+): string {
+  return (
+    buildPlanPromptPrefix(resolved)
+    + buildPlanPromptChunkBody(sourceSheetName, rows)
+    + buildPlanPromptSuffix(resolved, sourceSheetName)
+  );
 }

@@ -6,36 +6,73 @@ import type { EvaluationResult } from "../types/pipeline.js";
 import { evaluate } from "../pipeline/evaluator.js";
 import { generateJson } from "../llm/gemini-client.js";
 import { buildRepairPrompt } from "../llm/prompts/evaluator-prompt.js";
+import { expandKeys, TC_KEY_MAP } from "../llm/key-mapping.js";
 import type { Agent } from "./registry.js";
 import type { AgentResult, SubAgentConfig } from "./types.js";
 import type { eventBus } from "./event-bus.js";
 import type { EvaluatorInput } from "./deterministic-evaluator-agent.js";
 
 const MAX_REPAIR_ROUNDS = 2;
+const REPAIR_MAX_NEW_PER_ROUND = process.env.LLM_REPAIR_MAX_NEW_PER_ROUND
+  ? parseInt(process.env.LLM_REPAIR_MAX_NEW_PER_ROUND)
+  : 20;
+const REPAIR_MAX_PER_REQUIREMENT = process.env.LLM_REPAIR_MAX_PER_REQUIREMENT
+  ? parseInt(process.env.LLM_REPAIR_MAX_PER_REQUIREMENT)
+  : 2;
 
-const RepairResponseSchema = z.object({
-  newTestCases: z.array(
+function splitRequirementIds(raw: string): string[] {
+  return raw.split(",").map((id) => id.trim()).filter(Boolean);
+}
+
+function guardRepairCandidates(
+  existingTcs: TestCase[],
+  candidates: TestCase[],
+): TestCase[] {
+  const reqCounts = new Map<string, number>();
+  for (const tc of existingTcs) {
+    for (const reqId of splitRequirementIds(tc.Requirement_ID)) {
+      reqCounts.set(reqId, (reqCounts.get(reqId) ?? 0) + 1);
+    }
+  }
+
+  const accepted: TestCase[] = [];
+  for (const tc of candidates) {
+    if (accepted.length >= REPAIR_MAX_NEW_PER_ROUND) break;
+    const reqIds = splitRequirementIds(tc.Requirement_ID);
+    const overCap = reqIds.some((reqId) => (reqCounts.get(reqId) ?? 0) >= REPAIR_MAX_PER_REQUIREMENT);
+    if (overCap) continue;
+    for (const reqId of reqIds) {
+      reqCounts.set(reqId, (reqCounts.get(reqId) ?? 0) + 1);
+    }
+    accepted.push(tc);
+  }
+  return accepted;
+}
+
+const rm = TC_KEY_MAP;
+const CompactRepairResponseSchema = z.object({
+  ntc: z.array(
     z.object({
-      TC_ID: z.string(),
-      Feature: z.string(),
-      Requirement_ID: z.string(),
-      Scenario: z.string(),
-      Precondition: z.string(),
-      Test_Steps: z.string(),
-      Test_Data: z.string(),
-      Expected_Result: z.string(),
-      Priority: z.enum(["P0", "P1", "P2"]),
-      Severity: z.enum(["S1", "S2", "S3"]),
-      Type: z.enum(TC_TYPES as unknown as [string, ...string[]]),
-      Environment: z.string(),
-      Owner: z.string(),
-      Status: z.string(),
-      Automation_Candidate: z.string(),
-      Traceability: z.string(),
-      Notes: z.string(),
+      [rm.TC_ID]: z.string(),
+      [rm.Feature]: z.string(),
+      [rm.Requirement_ID]: z.string(),
+      [rm.Scenario]: z.string(),
+      [rm.Precondition]: z.string(),
+      [rm.Test_Steps]: z.string(),
+      [rm.Test_Data]: z.string(),
+      [rm.Expected_Result]: z.string(),
+      [rm.Priority]: z.enum(["P0", "P1", "P2"]),
+      [rm.Severity]: z.enum(["S1", "S2", "S3"]),
+      [rm.Type]: z.enum(TC_TYPES as unknown as [string, ...string[]]),
+      [rm.Environment]: z.string(),
+      [rm.Owner]: z.string(),
+      [rm.Status]: z.string(),
+      [rm.Automation_Candidate]: z.string(),
+      [rm.Traceability]: z.string(),
+      [rm.Notes]: z.string().optional(),
     }),
   ),
-  repairNotes: z.string(),
+  rn: z.string(),
 });
 
 export class LlmEvaluatorAgent implements Agent<EvaluatorInput, EvaluationResult> {
@@ -83,11 +120,15 @@ export class LlmEvaluatorAgent implements Agent<EvaluatorInput, EvaluationResult
           nextTcId,
         );
 
-        const { data: repairResult } = await generateJson(prompt, RepairResponseSchema);
+        const { data: compactResult } = await generateJson(prompt, CompactRepairResponseSchema);
+        const newTcs = expandKeys<TestCase>(compactResult.ntc, TC_KEY_MAP);
 
-        if (repairResult.newTestCases.length > 0) {
-          allTcs = [...allTcs, ...(repairResult.newTestCases as TestCase[])];
-          console.log(`[llm-eval] repair round ${round}: +${repairResult.newTestCases.length} TCs, note: ${repairResult.repairNotes}`);
+        if (newTcs.length > 0) {
+          const guarded = guardRepairCandidates(allTcs, newTcs);
+          allTcs = [...allTcs, ...guarded];
+          console.log(
+            `[llm-eval] repair round ${round}: +${guarded.length}/${newTcs.length} TCs, note: ${compactResult.rn}`,
+          );
         }
 
         evalResult = evaluate(input.checklist, allTcs, input.resolvedSkill);

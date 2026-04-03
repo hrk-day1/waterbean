@@ -102,6 +102,8 @@ export interface LlmUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** API 요청부터 응답 본문 수신까지 (ms) */
+  roundTripMs?: number;
 }
 
 export interface LlmResponse<T> {
@@ -140,11 +142,20 @@ async function callWithRetry(
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      const sentAt = new Date().toISOString();
+      const t0 = Date.now();
+      console.log(
+        `[llm] 요청 전송 sentAt=${sentAt} promptChars=${prompt.length} attempt=${attempt + 1}/${retries + 1}`,
+      );
       const result = await model.generateContent(prompt);
+      const roundTripMs = Date.now() - t0;
+      const receivedAt = new Date().toISOString();
       const response = result.response;
       const text = response.text();
-      const usage = extractUsage(response);
-      console.log(`[llm] tokens: prompt=${usage.promptTokens} completion=${usage.completionTokens}`);
+      const usage = { ...extractUsage(response), roundTripMs };
+      console.log(
+        `[llm] 응답 수신 receivedAt=${receivedAt} roundTripMs=${roundTripMs} promptTok=${usage.promptTokens} completionTok=${usage.completionTokens}`,
+      );
       return { text, usage };
     } catch (err) {
       lastError = err;
@@ -246,6 +257,103 @@ function extractJson(raw: string): string {
   return balanced ?? unfenced.trim();
 }
 
+/**
+ * LLM이 배열 대신 `{ "0": ..., "1": ... }` 형태의 숫자 키 객체를 반환하거나,
+ * 값이 JSON 문자열(`"{ ... }"`)로 감싸진 경우를 정상 배열로 변환한다.
+ */
+function normalizeIndexedObject(parsed: unknown): unknown {
+  if (Array.isArray(parsed) || typeof parsed !== "object" || parsed === null) {
+    return parsed;
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return parsed;
+
+  const allNumeric = keys.every((k) => /^\d+$/.test(k));
+  if (!allNumeric) return parsed;
+
+  const sorted = keys.sort((a, b) => Number(a) - Number(b));
+  return sorted.map((k) => {
+    const v = obj[k];
+    if (typeof v === "string") {
+      try { return JSON.parse(v); } catch { return v; }
+    }
+    return v;
+  });
+}
+
+/**
+ * LLM이 배열 원소를 객체가 아니라 JSON 직렬화 문자열(`"{\"k\":...}"`)로 넣는 경우를 객체로 풀어준다.
+ */
+function normalizeArrayStringElements(parsed: unknown): unknown {
+  if (!Array.isArray(parsed)) return parsed;
+  return parsed.map((item) => {
+    if (typeof item !== "string") return item;
+    const t = item.trim();
+    if (!t.startsWith("{") && !t.startsWith("[")) return item;
+    try {
+      return normalizeIndexedObject(JSON.parse(item));
+    } catch {
+      return item;
+    }
+  });
+}
+
+/**
+ * Zod 스키마가 string을 기대하는 위치에 LLM이 배열 또는 객체를 넣은 경우 문자열로 변환한다.
+ * - 배열 → 원소를 줄바꿈("\n")으로 join
+ * - 객체 → "key: value" 형태로 줄바꿈 join
+ * 재귀적으로 중첩 객체/배열에도 적용한다.
+ */
+function coerceNonStringFieldsToString(data: unknown): unknown {
+  if (data === null || data === undefined) return data;
+
+  if (Array.isArray(data)) {
+    return data.map((item) => coerceNonStringFieldsToString(item));
+  }
+
+  if (typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (Array.isArray(value)) {
+        const hasObject = value.some(
+          (v) => typeof v === "object" && v !== null && !Array.isArray(v),
+        );
+        if (hasObject) {
+          result[key] = value.map((item) => coerceNonStringFieldsToString(item));
+        } else {
+          result[key] = value.map((v) => String(v)).join("\n");
+        }
+      } else if (typeof value === "object" && value !== null) {
+        const inner = value as Record<string, unknown>;
+        const allPrimitiveValues = Object.values(inner).every(
+          (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
+        );
+        if (allPrimitiveValues) {
+          result[key] = Object.entries(inner)
+            .map(([k, v]) => `${k}: ${String(v)}`)
+            .join("\n");
+        } else {
+          result[key] = coerceNonStringFieldsToString(value);
+        }
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  return data;
+}
+
+function normalizeLlmParsedJson(parsed: unknown): unknown {
+  const indexed = normalizeIndexedObject(parsed);
+  const stringElements = normalizeArrayStringElements(indexed);
+  return coerceNonStringFieldsToString(stringElements);
+}
+
 export async function generateText(
   prompt: string,
   configOverrides?: Partial<GenerationConfig>,
@@ -270,7 +378,7 @@ export async function generateJson<T>(
 
   let firstParsed: unknown;
   try {
-    firstParsed = JSON.parse(jsonStr);
+    firstParsed = normalizeLlmParsedJson(JSON.parse(jsonStr));
   } catch (parseErr) {
     logLlmJsonFailure("generateJson JSON.parse (primary)", text, jsonStr, parseErr);
     throw new LlmJsonParseError(
@@ -289,6 +397,13 @@ export async function generateJson<T>(
   const repairPrompt = [
     "The previous response had validation errors. Fix the JSON to match the schema.",
     "",
+    "IMPORTANT RULES:",
+    '- All fields typed as "string" MUST be plain strings, NOT arrays or objects.',
+    '  - WRONG: "ts": ["step1", "step2"]  →  RIGHT: "ts": "step1\\nstep2"',
+    '  - WRONG: "td": {"key": "val"}     →  RIGHT: "td": "key: val"',
+    "- Each array element must be a JSON object, NOT a stringified JSON string.",
+    '  - WRONG: ["{\\"ti\\":\\"TC-0001\\"}"]  →  RIGHT: [{"ti":"TC-0001"}]',
+    "",
     "Validation errors:",
     JSON.stringify(firstParse.error.flatten(), null, 2),
     "",
@@ -303,7 +418,7 @@ export async function generateJson<T>(
 
   let secondParsed: unknown;
   try {
-    secondParsed = JSON.parse(repairJson);
+    secondParsed = normalizeLlmParsedJson(JSON.parse(repairJson));
   } catch (parseErr) {
     logLlmJsonFailure("generateJson JSON.parse (repair)", repair.text, repairJson, parseErr);
     throw new LlmJsonParseError(
@@ -320,6 +435,7 @@ export async function generateJson<T>(
     promptTokens: usage.promptTokens + repair.usage.promptTokens,
     completionTokens: usage.completionTokens + repair.usage.completionTokens,
     totalTokens: usage.totalTokens + repair.usage.totalTokens,
+    roundTripMs: (usage.roundTripMs ?? 0) + (repair.usage.roundTripMs ?? 0),
   };
 
   if (secondParse.success) {

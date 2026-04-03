@@ -5,9 +5,16 @@ import type { TcType } from "../types/tc.js";
 import type { SkillManifest } from "../skills/types.js";
 import { env } from "../config/env.js";
 import { generateJson } from "../llm/gemini-client.js";
-import { buildTaxonomySkeletonPrompt } from "../llm/prompts/taxonomy-skeleton-prompt.js";
+import { buildTaxonomySkeletonPrompt, buildHybridTaxonomyPrompt } from "../llm/prompts/taxonomy-skeleton-prompt.js";
 import { buildTaxonomyDomainDetailPrompt, buildKeywordRefillPrompt } from "../llm/prompts/taxonomy-domain-detail-prompt.js";
-import { mergeTaxonomyIntoResolved, type ResolvedSkill } from "../skills/resolved-skill.js";
+import {
+  skillManifestToResolved,
+  mergeTaxonomyIntoResolved,
+  mergeHybridTaxonomyIntoResolved,
+  type ResolvedSkill,
+  type HybridTaxonomyResult,
+} from "../skills/resolved-skill.js";
+import { buildKeywordPatterns, tryInferDomain } from "../pipeline/plan.js";
 import type { eventBus } from "./event-bus.js";
 
 const LLM_CONCURRENCY = 4;
@@ -38,8 +45,27 @@ const TaxonomyDomainDetailResponseSchema = z.object({
     id: z.string().regex(domainIdRegex),
     keywords: z.array(z.string().min(1).max(120)).min(1).max(40),
     minSets: z.record(TcTypeEnum, z.number().int().min(0).max(25)).optional(),
-    templates: z.array(TcTemplateSchema).min(1).max(12),
+    templates: z.array(TcTemplateSchema).max(12).optional(),
   }),
+});
+
+const HybridTaxonomySchema = z.object({
+  reclassified: z.array(
+    z.object({
+      rowIndex: z.number().int().min(0),
+      domain: z.string(),
+      suggestedKeywords: z.array(z.string().max(120)),
+    }),
+  ),
+  newDomains: z.array(
+    z.object({
+      id: z.string().regex(domainIdRegex),
+      summary: z.string().max(200).optional(),
+      keywords: z.array(z.string().min(1).max(120)).min(1).max(40),
+      minSets: z.record(TcTypeEnum, z.number().int().min(0).max(25)).optional(),
+      templates: z.array(TcTemplateSchema).max(12).optional(),
+    }),
+  ),
 });
 
 export interface TaxonomyPhaseInput {
@@ -50,6 +76,33 @@ export interface TaxonomyPhaseInput {
 }
 
 const jsonGenOverrides = { maxOutputTokens: env.llmMaxTokens };
+
+type DomainEntry = {
+  id: string;
+  keywords: string[];
+  minSets?: Partial<Record<TcType, number>>;
+  templates: { type: TcType; scenarioSuffix: string; precondition: string; steps: string; expectedResult: string }[];
+};
+
+function dedupeKeywordsByDomainOrder(domains: DomainEntry[]): { domains: DomainEntry[]; removedCount: number } {
+  const seen = new Set<string>();
+  let removedCount = 0;
+  const deduped = domains.map((domain) => {
+    const keywords: string[] = [];
+    for (const raw of domain.keywords) {
+      const key = raw.trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) {
+        removedCount++;
+        continue;
+      }
+      seen.add(key);
+      keywords.push(raw.trim());
+    }
+    return { ...domain, keywords };
+  });
+  return { domains: deduped, removedCount };
+}
 
 async function generateDomainDetailOnce(
   input: TaxonomyPhaseInput,
@@ -87,20 +140,164 @@ async function generateDomainDetailWithRetry(
   }
 }
 
-export async function runTaxonomyPhase(
+// ---------------------------------------------------------------------------
+// Phase 1: preset 키워드 기반 사전 분류
+// ---------------------------------------------------------------------------
+
+interface PreClassifyResult {
+  presetResolved: ResolvedSkill;
+  unclassifiedRows: string[][];
+  classifiedCount: number;
+}
+
+function preClassifyWithPreset(input: TaxonomyPhaseInput): PreClassifyResult {
+  const presetResolved = skillManifestToResolved(input.baseSkill);
+  const patterns = buildKeywordPatterns(presetResolved);
+
+  const unclassifiedRows: string[][] = [];
+  let classifiedCount = 0;
+
+  for (const row of input.sampleRows) {
+    const text = row.join(" ");
+    const domain = tryInferDomain(text, patterns, presetResolved);
+    if (domain) {
+      classifiedCount++;
+    } else {
+      unclassifiedRows.push(row);
+    }
+  }
+
+  return { presetResolved, unclassifiedRows, classifiedCount };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: 미분류 행에 대한 hybrid LLM taxonomy
+// ---------------------------------------------------------------------------
+
+async function runHybridLlmPhase(
   input: TaxonomyPhaseInput,
+  presetResolved: ResolvedSkill,
+  unclassifiedRows: string[][],
   bus: typeof eventBus,
   pipelineId: string,
-): Promise<ResolvedSkill> {
-  const agentId = `tax-llm-${crypto.randomUUID().slice(0, 6)}`;
-  const start = Date.now();
+  agentId: string,
+): Promise<{ resolved: ResolvedSkill; totalTokens: number }> {
+  bus.emit(pipelineId, {
+    agentId,
+    agentType: "taxonomy",
+    status: "running",
+    progress: 30,
+    message: `Taxonomy Phase 2: 미분류 ${unclassifiedRows.length}건 LLM 분석 중...`,
+    timestamp: new Date().toISOString(),
+    payload: { phase: "hybrid-llm", unclassifiedCount: unclassifiedRows.length },
+  });
+
+  const prompt = buildHybridTaxonomyPrompt(
+    presetResolved,
+    unclassifiedRows,
+    input.headers,
+    input.sourceSheetName,
+  );
+
+  const { data: hybridResult, usage } = await generateJson(prompt, HybridTaxonomySchema, jsonGenOverrides);
+  let totalTokens = usage.totalTokens;
+
+  const validReclassified = hybridResult.reclassified.filter(
+    (r) => presetResolved.domainOrder.includes(r.domain),
+  );
+
+  const existingIds = new Set(presetResolved.domainOrder);
+  const validNewDomains = hybridResult.newDomains.filter(
+    (nd) => !existingIds.has(nd.id) && domainIdRegex.test(nd.id),
+  );
 
   bus.emit(pipelineId, {
     agentId,
     agentType: "taxonomy",
     status: "running",
-    progress: 0,
-    message: "Taxonomy: 도메인 구조 설계 중...",
+    progress: 60,
+    message: `Taxonomy Phase 2: 재매핑 ${validReclassified.length}건, 새 도메인 ${validNewDomains.length}개`,
+    timestamp: new Date().toISOString(),
+    payload: {
+      phase: "hybrid-result",
+      reclassifiedCount: validReclassified.length,
+      newDomainCount: validNewDomains.length,
+      newDomainIds: validNewDomains.map((d) => d.id),
+    },
+  });
+
+  const hybridForMerge: HybridTaxonomyResult = {
+    reclassified: validReclassified,
+    newDomains: validNewDomains.map((nd) => ({
+      id: nd.id,
+      keywords: nd.keywords,
+      minSets: nd.minSets,
+      templates: (nd.templates ?? []).map((t) => ({ ...t, type: t.type as TcType })),
+    })),
+  };
+
+  if (validNewDomains.length > 0) {
+    bus.emit(pipelineId, {
+      agentId,
+      agentType: "taxonomy",
+      status: "running",
+      progress: 65,
+      message: `Taxonomy Phase 2: 새 도메인 ${validNewDomains.length}개 상세 검증 중...`,
+      timestamp: new Date().toISOString(),
+      payload: { phase: "new-domain-detail", count: validNewDomains.length },
+    });
+
+    const newDomainOrder = [
+      ...presetResolved.domainOrder,
+      ...validNewDomains.map((d) => d.id),
+    ] as readonly string[];
+
+    const detailResults = await Promise.allSettled(
+      validNewDomains
+        .filter((nd) => (nd.templates ?? []).length === 0)
+        .map(async (nd) => {
+          const { domain, usage: dUsage } = await generateDomainDetailWithRetry(
+            input, nd.id, newDomainOrder, nd.summary,
+          );
+          totalTokens += dUsage.totalTokens;
+          return domain;
+        }),
+    );
+
+    for (const r of detailResults) {
+      if (r.status !== "fulfilled") continue;
+      const idx = hybridForMerge.newDomains.findIndex((d) => d.id === r.value.id);
+      if (idx >= 0) {
+        hybridForMerge.newDomains[idx] = {
+          id: r.value.id,
+          keywords: r.value.keywords,
+          minSets: r.value.minSets,
+          templates: (r.value.templates ?? []).map((t) => ({ ...t, type: t.type as TcType })),
+        };
+      }
+    }
+  }
+
+  const resolved = mergeHybridTaxonomyIntoResolved(presetResolved, hybridForMerge);
+  return { resolved, totalTokens };
+}
+
+// ---------------------------------------------------------------------------
+// Full LLM taxonomy (기존 경로, 폴백용)
+// ---------------------------------------------------------------------------
+
+async function runFullTaxonomyPhase(
+  input: TaxonomyPhaseInput,
+  bus: typeof eventBus,
+  pipelineId: string,
+  agentId: string,
+): Promise<{ resolved: ResolvedSkill; totalTokens: number }> {
+  bus.emit(pipelineId, {
+    agentId,
+    agentType: "taxonomy",
+    status: "running",
+    progress: 10,
+    message: "Taxonomy: 전체 도메인 구조 설계 중 (full LLM)...",
     timestamp: new Date().toISOString(),
     payload: { phase: "skeleton" },
   });
@@ -128,31 +325,6 @@ export async function runTaxonomyPhase(
   });
 
   let totalTokens = skUsage.totalTokens;
-  type DomainEntry = {
-    id: string;
-    keywords: string[];
-    minSets?: Partial<Record<TcType, number>>;
-    templates: { type: TcType; scenarioSuffix: string; precondition: string; steps: string; expectedResult: string }[];
-  };
-  function dedupeKeywordsByDomainOrder(domains: DomainEntry[]): { domains: DomainEntry[]; removedCount: number } {
-    const seen = new Set<string>();
-    let removedCount = 0;
-    const deduped = domains.map((domain) => {
-      const keywords: string[] = [];
-      for (const raw of domain.keywords) {
-        const key = raw.trim().toLowerCase();
-        if (!key) continue;
-        if (seen.has(key)) {
-          removedCount++;
-          continue;
-        }
-        seen.add(key);
-        keywords.push(raw.trim());
-      }
-      return { ...domain, keywords };
-    });
-    return { domains: deduped, removedCount };
-  }
 
   const n = domainOrder.length;
   let doneCount = 0;
@@ -193,7 +365,7 @@ export async function runTaxonomyPhase(
         id: domain.id,
         keywords: domain.keywords,
         minSets: domain.minSets,
-        templates: domain.templates.map((t) => ({ ...t, type: t.type as TcType })),
+        templates: (domain.templates ?? []).map((t) => ({ ...t, type: t.type as TcType })),
       };
     } finally {
       release();
@@ -290,16 +462,84 @@ export async function runTaxonomyPhase(
   }
 
   const resolved = mergeTaxonomyIntoResolved(input.baseSkill, { domains: dedupedDomains });
+  return { resolved, totalTokens };
+}
+
+// ---------------------------------------------------------------------------
+// 공개 엔트리포인트: Phase 1 -> (필요시) Phase 2
+// ---------------------------------------------------------------------------
+
+export async function runTaxonomyPhase(
+  input: TaxonomyPhaseInput,
+  bus: typeof eventBus,
+  pipelineId: string,
+): Promise<ResolvedSkill> {
+  const agentId = `tax-llm-${crypto.randomUUID().slice(0, 6)}`;
+  const start = Date.now();
 
   bus.emit(pipelineId, {
     agentId,
     agentType: "taxonomy",
-    status: "completed",
-    progress: 100,
-    message: `Taxonomy 완료: ${resolved.domainOrder.length}개 도메인 (tokens: ${totalTokens})`,
+    status: "running",
+    progress: 0,
+    message: "Taxonomy Phase 1: preset 키워드 기반 사전 분류 중...",
     timestamp: new Date().toISOString(),
-    payload: { usage: { totalTokens }, domainOrder: [...resolved.domainOrder] },
+    payload: { phase: "preset-classify" },
   });
+
+  const { presetResolved, unclassifiedRows, classifiedCount } = preClassifyWithPreset(input);
+  const totalRows = input.sampleRows.length;
+
+  bus.emit(pipelineId, {
+    agentId,
+    agentType: "taxonomy",
+    status: "running",
+    progress: 15,
+    message: `Taxonomy Phase 1: ${classifiedCount}/${totalRows}건 분류 완료, 미분류 ${unclassifiedRows.length}건`,
+    timestamp: new Date().toISOString(),
+    payload: {
+      phase: "preset-classify-done",
+      classifiedCount,
+      unclassifiedCount: unclassifiedRows.length,
+      totalRows,
+    },
+  });
+
+  let resolved: ResolvedSkill;
+  let totalTokens = 0;
+
+  if (unclassifiedRows.length === 0) {
+    resolved = presetResolved;
+    console.log(`[taxonomy] ${pipelineId} all ${totalRows} rows classified by preset, skipping LLM`);
+
+    bus.emit(pipelineId, {
+      agentId,
+      agentType: "taxonomy",
+      status: "completed",
+      progress: 100,
+      message: `Taxonomy 완료: preset 분류로 전체 커버 (LLM 호출 없음, ${resolved.domainOrder.length}개 도메인)`,
+      timestamp: new Date().toISOString(),
+      payload: { usage: { totalTokens: 0 }, domainOrder: [...resolved.domainOrder], skippedLlm: true },
+    });
+  } else {
+    console.log(`[taxonomy] ${pipelineId} ${unclassifiedRows.length}/${totalRows} rows unclassified, running hybrid LLM`);
+
+    const hybridResult = await runHybridLlmPhase(
+      input, presetResolved, unclassifiedRows, bus, pipelineId, agentId,
+    );
+    resolved = hybridResult.resolved;
+    totalTokens = hybridResult.totalTokens;
+
+    bus.emit(pipelineId, {
+      agentId,
+      agentType: "taxonomy",
+      status: "completed",
+      progress: 100,
+      message: `Taxonomy 완료: ${resolved.domainOrder.length}개 도메인 (tokens: ${totalTokens})`,
+      timestamp: new Date().toISOString(),
+      payload: { usage: { totalTokens }, domainOrder: [...resolved.domainOrder] },
+    });
+  }
 
   console.log(`[taxonomy] ${pipelineId} domains=${resolved.domainOrder.join(",")} ${Date.now() - start}ms tokens=${totalTokens}`);
 

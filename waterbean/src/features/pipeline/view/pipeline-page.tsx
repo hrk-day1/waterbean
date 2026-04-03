@@ -42,6 +42,7 @@ export function PipelinePage() {
   const [fallback, setFallback] = useState("2");
   const [skillId, setSkillId] = useState("default");
   const [implementation, setImplementation] = useState<"deterministic" | "llm">("llm");
+  const [mergeSimilar, setMergeSimilar] = useState<"false" | "true">("false");
 
   const skillOptions = skills.map((s) => ({ value: s.id, label: s.name }));
 
@@ -59,6 +60,7 @@ export function PipelinePage() {
       maxFallbackRounds: Number(fallback),
       skillId,
       implementation,
+      mergeSimilarTestCases: mergeSimilar === "true",
     });
   };
 
@@ -163,6 +165,16 @@ export function PipelinePage() {
               ]}
               value={implementation}
               onChange={(e) => setImplementation(e.target.value as "deterministic" | "llm")}
+            />
+            <Select
+              id="mergeSimilar"
+              label={t("pipeline.label.mergeSimilarTestCases")}
+              options={[
+                { value: "false", label: t("pipeline.mergeSimilar.off") },
+                { value: "true", label: t("pipeline.mergeSimilar.on") },
+              ]}
+              value={mergeSimilar}
+              onChange={(e) => setMergeSimilar(e.target.value as "false" | "true")}
             />
           </div>
 

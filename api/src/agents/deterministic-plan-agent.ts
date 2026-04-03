@@ -40,9 +40,12 @@ export class DeterministicPlanAgent implements Agent<PlanInput, ChecklistItem[]>
         headers, dataRows, input.sourceSheetName, headerRowIndex, input.resolvedSkill,
       );
 
+      const classifiedCount = checklist.filter((c) => c.featureTypes && c.featureTypes.length > 0).length;
+
       bus.emit(config.pipelineId, {
         agentId, agentType: "plan", status: "completed", progress: 100,
-        message: `${checklist.length}건 체크리스트 완료`, timestamp: new Date().toISOString(),
+        message: `${checklist.length}건 체크리스트 완료 (기능유형 분류 ${classifiedCount}건)`,
+        timestamp: new Date().toISOString(),
       });
 
       return {

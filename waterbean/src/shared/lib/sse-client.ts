@@ -2,7 +2,7 @@ const BASE_URL = "/api";
 
 export interface AgentEvent {
   agentId: string;
-  agentType: "taxonomy" | "taxonomy-evaluator" | "plan" | "generator" | "evaluator";
+  agentType: "taxonomy" | "taxonomy-evaluator" | "plan" | "generator" | "merge" | "evaluator";
   status: "pending" | "running" | "completed" | "failed";
   progress: number;
   message: string;

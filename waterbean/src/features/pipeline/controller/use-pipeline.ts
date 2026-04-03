@@ -52,6 +52,7 @@ export interface PipelineRequest {
   maxFallbackRounds: number;
   skillId: string;
   implementation?: "deterministic" | "llm";
+  mergeSimilarTestCases?: boolean;
 }
 
 export interface SkillSummary {
@@ -60,12 +61,30 @@ export interface SkillSummary {
   description: string;
 }
 
+/** 오케스트레이터 SSE `payload` (선택). */
+export interface OrchestratorProgressPayload {
+  phase?: "batch_generate" | "final_eval" | "final_fallback" | "merge";
+  batchCurrent?: number;
+  batchTotal?: number;
+  batchSize?: number;
+  checklistTotal?: number;
+  checklistInBatch?: number;
+  tcGeneratedThisBatch?: number;
+  tcCountSoFar?: number;
+  totalTcCount?: number;
+  uncoveredCount?: number;
+  evalRound?: number;
+  maxFallbackRounds?: number;
+}
+
 export interface AgentState {
   agentId: string;
-  agentType: "taxonomy" | "taxonomy-evaluator" | "plan" | "generator" | "evaluator";
+  agentType: "taxonomy" | "taxonomy-evaluator" | "plan" | "generator" | "merge" | "evaluator";
   status: "pending" | "running" | "completed" | "failed";
   progress: number;
   message: string;
+  /** SSE 이벤트의 상세 진행 정보(오케스트레이터 등) */
+  payload?: OrchestratorProgressPayload;
 }
 
 export function useSkills() {
@@ -104,12 +123,17 @@ export function usePipeline() {
   const updateAgent = useCallback((event: AgentEvent) => {
     setAgents((prev) => {
       const idx = prev.findIndex((a) => a.agentId === event.agentId);
+      const payload =
+        event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+          ? (event.payload as OrchestratorProgressPayload)
+          : undefined;
       const state: AgentState = {
         agentId: event.agentId,
         agentType: event.agentType,
         status: event.status,
         progress: event.progress,
         message: event.message,
+        ...(payload ? { payload } : {}),
       };
       if (idx >= 0) {
         const next = [...prev];

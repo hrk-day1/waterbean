@@ -9,7 +9,31 @@ import type { AgentResult, SubAgentConfig } from "./types.js";
 import type { eventBus } from "./event-bus.js";
 import type { TaxonomyEvaluatorInput } from "./deterministic-taxonomy-evaluator-agent.js";
 
-const LlmTaxonomyEvalSchema = z.object({
+function normalizeTaxonomyEvalPayload(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const o = { ...(raw as Record<string, unknown>) };
+  const sug = o.suggestions;
+
+  if (typeof sug === "string") {
+    const t = sug.trim();
+    o.suggestions = t ? [t] : [];
+    return o;
+  }
+
+  if (Array.isArray(sug)) {
+    o.suggestions = sug.map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object" && item !== null && "suggestion" in item) {
+        return String((item as { suggestion: unknown }).suggestion);
+      }
+      return String(item);
+    });
+  }
+
+  return o;
+}
+
+const LlmTaxonomyEvalInner = z.object({
   passed: z.boolean(),
   issues: z.array(
     z.object({
@@ -20,6 +44,13 @@ const LlmTaxonomyEvalSchema = z.object({
   ),
   suggestions: z.array(z.string()),
 });
+
+type LlmTaxonomyEvalParsed = z.infer<typeof LlmTaxonomyEvalInner>;
+
+const LlmTaxonomyEvalSchema = z.preprocess(
+  normalizeTaxonomyEvalPayload,
+  LlmTaxonomyEvalInner,
+) as z.ZodType<LlmTaxonomyEvalParsed>;
 
 export class LlmTaxonomyEvaluatorAgent
   implements Agent<TaxonomyEvaluatorInput, TaxonomyEvaluationResult>

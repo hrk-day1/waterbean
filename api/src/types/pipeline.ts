@@ -19,6 +19,7 @@ export interface PipelineConfig {
   skillId: string;
   implementation?: Implementation;
   maxLlmRounds?: number;
+  mergeSimilarTestCases?: boolean;
 }
 
 export interface PlanResult {
@@ -36,6 +37,7 @@ export type EvaluationIssueType =
   | "required_field"
   | "domain_min"
   | "coverage"
+  | "test_point_missing"
   | "duplicate"
   | "taxonomy_domain_count"
   | "taxonomy_keyword_quality"

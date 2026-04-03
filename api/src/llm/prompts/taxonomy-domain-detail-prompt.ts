@@ -63,6 +63,7 @@ export function buildTaxonomyDomainDetailPrompt(
 
 ## 언어 규칙
 - keywords, 템플릿의 scenarioSuffix, precondition, steps, expectedResult 등 **자연어는 반드시 한국어**로 작성하세요.
+- 템플릿 **precondition**은 **짧게**(전제 키워드·한 줄, 장문 서술 금지). 예: \`권한계정·목록화면\`
 
 ## 베이스 스킬 (참고용 메타)
 - id: ${baseSkill.id}
@@ -89,7 +90,7 @@ ${rowsPreview}
    - 다른 도메인과 **중복되지 않는 키워드만** 넣으세요. 대소문자 차이/앞뒤 공백만 다른 경우도 중복으로 간주합니다.
    - 공통 단어(예: 로그인, 버튼, 화면, 오류)만 단독으로 나열하지 말고, 이 도메인에 특화된 구체어를 우선하세요.
 3. **minSets** (선택): TC Type별 최소 개수. 키는 반드시 다음 중에서만: ${JSON.stringify([...TC_TYPES])}. 값은 0~25 정수.
-4. **templates**: 이 도메인용 Few-Shot TC 템플릿 **1~12개**. type은 위 TC Type 중 하나.
+4. **templates** (선택): 이 도메인의 정책 힌트용 참고 템플릿. 있으면 0~12개. 없어도 됩니다.
 
 ## 출력 형식
 유효한 JSON 객체 하나만 반환하세요 (마크다운 펜스 금지):
@@ -97,16 +98,7 @@ ${rowsPreview}
   "domain": {
     "id": "${domainId}",
     "keywords": ["키워드1"],
-    "minSets": { "Functional": 2, "Negative": 1 },
-    "templates": [
-      {
-        "type": "Functional",
-        "scenarioSuffix": "...",
-        "precondition": "...",
-        "steps": "...",
-        "expectedResult": "..."
-      }
-    ]
+    "minSets": { "Functional": 2, "Negative": 1 }
   }
 }`;
 }

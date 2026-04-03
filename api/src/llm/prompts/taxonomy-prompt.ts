@@ -17,6 +17,7 @@ export function buildTaxonomyPrompt(
 
 ## 언어 규칙
 - keywords, 템플릿의 scenarioSuffix, precondition, steps, expectedResult 등 **자연어는 반드시 한국어**로 작성하세요.
+- 템플릿 **precondition**은 짧은 전제 키워드(한 줄)로, 장문 서술은 피하세요.
 - domain id는 영문 slug만 사용합니다 (아래 형식).
 
 ## 베이스 스킬 (참고용 메타)

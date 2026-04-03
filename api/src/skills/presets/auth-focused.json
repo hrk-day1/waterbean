@@ -1,7 +1,7 @@
 {
   "id": "auth-focused",
   "name": "Auth 강화 스킬",
-  "description": "인증/보안 도메인에 집중하여 Security/Negative TC를 강화한 프리셋. Auth 최소 세트를 높이고, 전체 도메인의 Security TC를 보강한다.",
+  "description": "인증/보안 도메인에 집중하여 Security/Negative TC를 강화한 정책 프리셋. Auth 최소 세트를 높이고, 전체 도메인의 Security TC를 보강한다.",
   "domainKeywords": {
     "Payment": ["pay", "payment", "refund", "invoice", "billing", "결제", "환불", "정산", "주문"],
     "Auth": ["login", "auth", "token", "mfa", "password", "인증", "로그인", "세션", "비밀번호", "oauth", "sso", "2fa", "otp", "jwt", "쿠키", "cookie", "session"],
@@ -11,72 +11,21 @@
     "Creator": ["creator", "크리에이터", "채널", "프로필"],
     "Admin": ["admin", "role", "permission", "console", "운영", "권한", "관리자"]
   },
-  "templates": {
-    "Auth": [
-      { "type": "Functional", "scenarioSuffix": "유효 자격증명으로 로그인 성공", "precondition": "등록된 사용자 계정 존재", "steps": "1. 로그인 화면 진입\n2. 유효한 자격증명 입력\n3. 로그인 버튼 클릭", "expectedResult": "로그인 성공, 대시보드 이동" },
-      { "type": "Functional", "scenarioSuffix": "토큰 갱신 성공", "precondition": "로그인 상태, 토큰 만료 임박", "steps": "1. 인증된 API 호출\n2. 토큰 자동 갱신 확인", "expectedResult": "새 토큰 발급, 요청 정상 처리" },
-      { "type": "Functional", "scenarioSuffix": "SSO/OAuth 외부 인증 연동 검증", "precondition": "외부 IdP 설정 완료", "steps": "1. SSO 로그인 버튼 클릭\n2. 외부 IdP 인증 수행\n3. 콜백 처리 확인", "expectedResult": "외부 인증 성공, 세션 생성" },
-      { "type": "Negative", "scenarioSuffix": "비밀번호 오류 시 로그인 실패", "precondition": "등록된 사용자 계정 존재", "steps": "1. 로그인 화면 진입\n2. 잘못된 비밀번호 입력\n3. 로그인 버튼 클릭", "expectedResult": "로그인 실패, 오류 메시지 표시" },
-      { "type": "Negative", "scenarioSuffix": "만료 토큰 호출 시 401 반환", "precondition": "만료된 토큰 보유", "steps": "1. 만료 토큰으로 API 호출", "expectedResult": "401 Unauthorized 응답" },
-      { "type": "Negative", "scenarioSuffix": "탈퇴/비활성 계정 로그인 차단 검증", "precondition": "탈퇴 또는 비활성 상태 계정", "steps": "1. 비활성 계정으로 로그인 시도", "expectedResult": "로그인 차단, 계정 상태 안내" },
-      { "type": "Negative", "scenarioSuffix": "동시 세션 제한 초과 검증", "precondition": "동시 세션 수 제한 정책 설정", "steps": "1. 최대 세션 수 로그인\n2. 추가 기기에서 로그인 시도", "expectedResult": "기존 세션 만료 또는 신규 로그인 차단" },
-      { "type": "Boundary", "scenarioSuffix": "비밀번호 최소/최대 길이 경계값 검증", "precondition": "회원가입 화면", "steps": "1. 최소 길이 비밀번호 입력\n2. 최대 길이 비밀번호 입력\n3. 경계값 검증", "expectedResult": "경계값 내 입력 허용, 초과 시 오류" },
-      { "type": "Boundary", "scenarioSuffix": "OTP/인증코드 유효시간 경계 검증", "precondition": "OTP 발급 상태", "steps": "1. 유효시간 직전 입력\n2. 유효시간 직후 입력", "expectedResult": "직전 성공, 직후 만료 오류" },
-      { "type": "Security", "scenarioSuffix": "변조 토큰 차단 검증", "precondition": "변조된 JWT 토큰 준비", "steps": "1. 변조 토큰으로 API 호출", "expectedResult": "요청 거부, 403 응답" },
-      { "type": "Security", "scenarioSuffix": "연속 실패 잠금 정책 검증", "precondition": "등록된 사용자 계정", "steps": "1. 연속 N회 로그인 실패\n2. 계정 잠금 확인", "expectedResult": "계정 잠금 후 일정 시간 재시도 차단" },
-      { "type": "Security", "scenarioSuffix": "CSRF 토큰 미포함 요청 차단 검증", "precondition": "인증된 세션 존재", "steps": "1. CSRF 토큰 없이 상태 변경 API 호출", "expectedResult": "403 Forbidden 응답" },
-      { "type": "Security", "scenarioSuffix": "XSS 페이로드 입력 무해화 검증", "precondition": "로그인 입력 폼", "steps": "1. 사용자명/비밀번호에 스크립트 태그 삽입\n2. 응답 확인", "expectedResult": "스크립트 실행 차단, 이스케이프 처리" },
-      { "type": "Regression", "scenarioSuffix": "인증 API 회귀 테스트", "precondition": "로그인 상태", "steps": "1. 기존 인증 플로우 전체 수행\n2. 결과 확인", "expectedResult": "기존 기능 정상 동작" }
-    ],
-    "Payment": [
-      { "type": "Functional", "scenarioSuffix": "정상 승인 처리 검증", "precondition": "유효 결제수단, 충분 잔액", "steps": "1. 결제 요청\n2. 승인 확인", "expectedResult": "결제 승인, 주문 상태 변경" },
-      { "type": "Functional", "scenarioSuffix": "전액 환불 처리 검증", "precondition": "승인 완료된 주문 존재", "steps": "1. 환불 요청\n2. 환불 상태 확인", "expectedResult": "전액 환불 완료" },
-      { "type": "Negative", "scenarioSuffix": "잔액 부족 결제 실패 검증", "precondition": "잔액 부족 결제수단", "steps": "1. 결제 요청", "expectedResult": "결제 실패, 잔액 부족 메시지" },
-      { "type": "Negative", "scenarioSuffix": "카드 만료 결제 실패 검증", "precondition": "만료 카드 등록", "steps": "1. 만료 카드로 결제 요청", "expectedResult": "결제 실패, 카드 만료 안내" },
-      { "type": "Negative", "scenarioSuffix": "PG 타임아웃 재시도 검증", "precondition": "PG 응답 지연 환경", "steps": "1. 결제 요청\n2. 타임아웃 발생\n3. 재시도", "expectedResult": "타임아웃 후 적절한 재시도 또는 오류 안내" },
-      { "type": "Boundary", "scenarioSuffix": "최소 결제 금액 경계값 검증", "precondition": "최소 금액 제한 설정", "steps": "1. 최소 금액으로 결제\n2. 최소 금액 미만으로 결제", "expectedResult": "최소 금액 이상 승인, 미만 거부" },
-      { "type": "Boundary", "scenarioSuffix": "최대 결제 금액 경계값 검증", "precondition": "최대 금액 제한 설정", "steps": "1. 최대 금액으로 결제\n2. 최대 금액 초과로 결제", "expectedResult": "최대 금액 이하 승인, 초과 거부" },
-      { "type": "Security", "scenarioSuffix": "금액 변조 차단 검증", "precondition": "정상 결제 요청 준비", "steps": "1. 클라이언트에서 금액 변조\n2. 서버 요청 전송", "expectedResult": "변조 감지, 요청 거부" },
-      { "type": "Security", "scenarioSuffix": "멱등키 중복 요청 방지 검증", "precondition": "동일 멱등키 준비", "steps": "1. 동일 멱등키로 결제 2회 요청", "expectedResult": "1회만 처리, 중복 응답 반환" },
-      { "type": "Regression", "scenarioSuffix": "승인-취소-환불 상태전이 회귀", "precondition": "결제 가능 상태", "steps": "1. 승인\n2. 취소\n3. 환불\n4. 상태 전이 검증", "expectedResult": "상태 전이 정상 동작" },
-      { "type": "Regression", "scenarioSuffix": "웹훅 수신 처리 회귀", "precondition": "웹훅 수신 설정 완료", "steps": "1. 결제 이벤트 발생\n2. 웹훅 수신 확인", "expectedResult": "웹훅 정상 수신 및 처리" }
-    ],
-    "Content": [
-      { "type": "Functional", "scenarioSuffix": "정상 조회 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 대상 화면 진입\n2. 리스트/상세 조회", "expectedResult": "데이터 정상 조회" },
-      { "type": "Functional", "scenarioSuffix": "등록/수정 저장 성공 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 등록/수정 화면 진입\n2. 유효 데이터 입력\n3. 저장", "expectedResult": "저장 성공, 변경 반영" },
-      { "type": "Negative", "scenarioSuffix": "필수값 누락 저장 실패 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 필수 필드를 비움\n2. 저장 시도", "expectedResult": "저장 실패, 필수값 안내" },
-      { "type": "Security", "scenarioSuffix": "읽기전용 계정 쓰기 차단 검증", "precondition": "읽기전용 권한 계정 로그인", "steps": "1. 쓰기 기능 시도", "expectedResult": "쓰기 차단, 권한 부족 안내" },
-      { "type": "Regression", "scenarioSuffix": "기존 기능 회귀 테스트", "precondition": "기능 변경 완료 상태", "steps": "1. 기존 플로우 전체 수행\n2. 결과 확인", "expectedResult": "기존 기능 정상 동작" }
-    ],
-    "Membership": [
-      { "type": "Functional", "scenarioSuffix": "정상 조회 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 대상 화면 진입\n2. 리스트/상세 조회", "expectedResult": "데이터 정상 조회" },
-      { "type": "Functional", "scenarioSuffix": "등록/수정 저장 성공 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 등록/수정 화면 진입\n2. 유효 데이터 입력\n3. 저장", "expectedResult": "저장 성공, 변경 반영" },
-      { "type": "Negative", "scenarioSuffix": "필수값 누락 저장 실패 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 필수 필드를 비움\n2. 저장 시도", "expectedResult": "저장 실패, 필수값 안내" },
-      { "type": "Security", "scenarioSuffix": "읽기전용 계정 쓰기 차단 검증", "precondition": "읽기전용 권한 계정 로그인", "steps": "1. 쓰기 기능 시도", "expectedResult": "쓰기 차단, 권한 부족 안내" },
-      { "type": "Regression", "scenarioSuffix": "기존 기능 회귀 테스트", "precondition": "기능 변경 완료 상태", "steps": "1. 기존 플로우 전체 수행\n2. 결과 확인", "expectedResult": "기존 기능 정상 동작" }
-    ],
-    "Community": [
-      { "type": "Functional", "scenarioSuffix": "정상 조회 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 대상 화면 진입\n2. 리스트/상세 조회", "expectedResult": "데이터 정상 조회" },
-      { "type": "Functional", "scenarioSuffix": "등록/수정 저장 성공 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 등록/수정 화면 진입\n2. 유효 데이터 입력\n3. 저장", "expectedResult": "저장 성공, 변경 반영" },
-      { "type": "Negative", "scenarioSuffix": "필수값 누락 저장 실패 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 필수 필드를 비움\n2. 저장 시도", "expectedResult": "저장 실패, 필수값 안내" },
-      { "type": "Security", "scenarioSuffix": "읽기전용 계정 쓰기 차단 검증", "precondition": "읽기전용 권한 계정 로그인", "steps": "1. 쓰기 기능 시도", "expectedResult": "쓰기 차단, 권한 부족 안내" },
-      { "type": "Regression", "scenarioSuffix": "기존 기능 회귀 테스트", "precondition": "기능 변경 완료 상태", "steps": "1. 기존 플로우 전체 수행\n2. 결과 확인", "expectedResult": "기존 기능 정상 동작" }
-    ],
-    "Creator": [
-      { "type": "Functional", "scenarioSuffix": "정상 조회 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 대상 화면 진입\n2. 리스트/상세 조회", "expectedResult": "데이터 정상 조회" },
-      { "type": "Functional", "scenarioSuffix": "등록/수정 저장 성공 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 등록/수정 화면 진입\n2. 유효 데이터 입력\n3. 저장", "expectedResult": "저장 성공, 변경 반영" },
-      { "type": "Negative", "scenarioSuffix": "필수값 누락 저장 실패 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 필수 필드를 비움\n2. 저장 시도", "expectedResult": "저장 실패, 필수값 안내" },
-      { "type": "Security", "scenarioSuffix": "읽기전용 계정 쓰기 차단 검증", "precondition": "읽기전용 권한 계정 로그인", "steps": "1. 쓰기 기능 시도", "expectedResult": "쓰기 차단, 권한 부족 안내" },
-      { "type": "Regression", "scenarioSuffix": "기존 기능 회귀 테스트", "precondition": "기능 변경 완료 상태", "steps": "1. 기존 플로우 전체 수행\n2. 결과 확인", "expectedResult": "기존 기능 정상 동작" }
-    ],
-    "Admin": [
-      { "type": "Functional", "scenarioSuffix": "정상 조회 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 대상 화면 진입\n2. 리스트/상세 조회", "expectedResult": "데이터 정상 조회" },
-      { "type": "Functional", "scenarioSuffix": "등록/수정 저장 성공 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 등록/수정 화면 진입\n2. 유효 데이터 입력\n3. 저장", "expectedResult": "저장 성공, 변경 반영" },
-      { "type": "Negative", "scenarioSuffix": "필수값 누락 저장 실패 검증", "precondition": "관리자 권한 로그인 상태", "steps": "1. 필수 필드를 비움\n2. 저장 시도", "expectedResult": "저장 실패, 필수값 안내" },
-      { "type": "Security", "scenarioSuffix": "읽기전용 계정 쓰기 차단 검증", "precondition": "읽기전용 권한 계정 로그인", "steps": "1. 쓰기 기능 시도", "expectedResult": "쓰기 차단, 권한 부족 안내" },
-      { "type": "Regression", "scenarioSuffix": "기존 기능 회귀 테스트", "precondition": "기능 변경 완료 상태", "steps": "1. 기존 플로우 전체 수행\n2. 결과 확인", "expectedResult": "기존 기능 정상 동작" }
-    ]
-  },
+  "policyHints": [
+    { "domain": "_common", "hint": "templates/commonTemplates의 steps와 생성 TC의 Test_Steps에는 로그인·메뉴 이동·단순 화면 진입 문구를 매번 넣지 말 것. 계정·역할·초기 화면은 precondition에만 기술한다", "riskLevel": "low" },
+    { "domain": "_common", "hint": "화면이 존재하는 기능은 읽기전용 계정의 쓰기 차단을 검증해야 한다", "riskLevel": "high" },
+    { "domain": "_common", "hint": "CRUD 기능은 필수값 누락 시 저장 실패 검증이 필요하다", "riskLevel": "medium" },
+    { "domain": "Auth", "hint": "변조 토큰(JWT)으로 API 호출 시 차단되어야 한다", "riskLevel": "high" },
+    { "domain": "Auth", "hint": "연속 로그인 실패 시 계정 잠금 정책이 동작해야 한다", "riskLevel": "high" },
+    { "domain": "Auth", "hint": "CSRF 토큰 미포함 상태 변경 요청이 차단되어야 한다", "riskLevel": "high" },
+    { "domain": "Auth", "hint": "XSS 페이로드 입력이 무해화(이스케이프) 처리되어야 한다", "riskLevel": "high" },
+    { "domain": "Auth", "hint": "SSO/OAuth 외부 인증 연동 시 콜백 처리를 검증해야 한다", "riskLevel": "medium" },
+    { "domain": "Auth", "hint": "탈퇴/비활성 계정의 로그인이 차단되어야 한다", "riskLevel": "medium" },
+    { "domain": "Auth", "hint": "동시 세션 제한 초과 시 기존 세션 만료 또는 신규 차단을 검증해야 한다", "riskLevel": "medium" },
+    { "domain": "Auth", "hint": "OTP/인증코드 유효시간 경계에서 만료 처리를 검증해야 한다", "riskLevel": "medium" },
+    { "domain": "Payment", "hint": "결제 금액 변조 차단과 멱등키 중복 요청 방지를 검증해야 한다", "riskLevel": "high" },
+    { "domain": "Payment", "hint": "승인-취소-환불 상태 전이와 웹훅 수신 처리를 검증해야 한다", "riskLevel": "high" }
+  ],
   "domainMinSets": {
     "Auth": { "Functional": 3, "Negative": 3, "Boundary": 2, "Security": 4, "Regression": 1, "Accessibility": 0 },
     "Payment": { "Functional": 2, "Negative": 3, "Boundary": 2, "Security": 2, "Regression": 2, "Accessibility": 0 },

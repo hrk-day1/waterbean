@@ -8,6 +8,12 @@ export interface TcTemplate {
   expectedResult: string;
 }
 
+export interface PolicyHint {
+  domain: string;
+  hint: string;
+  riskLevel?: "high" | "medium" | "low";
+}
+
 export interface PriorityRule {
   domain: Domain;
   types: TcType[];
@@ -25,7 +31,11 @@ export interface SkillManifest {
   name: string;
   description: string;
   domainKeywords: Record<Domain, string[]>;
-  templates: Record<Domain, TcTemplate[]>;
+  /** @deprecated Phase 4에서 policyHints로 대체됨. 하위호환용으로 유지. */
+  commonTemplates?: TcTemplate[];
+  /** @deprecated Phase 4에서 policyHints로 대체됨. 하위호환용으로 유지. */
+  templates?: Record<Domain, TcTemplate[]>;
+  policyHints?: PolicyHint[];
   domainMinSets: Record<Domain, Record<TcType, number>>;
   priorityRules: PriorityRule[];
   severityRules: SeverityRule[];
