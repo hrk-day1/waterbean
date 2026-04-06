@@ -1,5 +1,11 @@
 import crypto from "node:crypto";
-import type { PipelineConfig, PipelineResult, Implementation, TaxonomyEvaluationResult } from "../types/pipeline.js";
+import type {
+  EvaluateOptions,
+  Implementation,
+  PipelineConfig,
+  PipelineResult,
+  TaxonomyEvaluationResult,
+} from "../types/pipeline.js";
 import type { ChecklistItem, TestCase } from "../types/tc.js";
 import type { EvaluationResult } from "../types/pipeline.js";
 import { parseSpreadsheetUrl, findSheetName, readSheetValues } from "../sheets/reader.js";
@@ -243,8 +249,15 @@ async function runOrchestrationBody(
     ownerDefault: config.ownerDefault,
     environmentDefault: config.environmentDefault,
     maxTcPerRequirement: config.maxTcPerRequirement,
+    highRiskMaxTcPerRequirement:
+      config.highRiskMaxTcPerRequirement ?? env.highRiskMaxTcPerRequirementDefault,
+    domainMinSetFill: config.domainMinSetFill ?? env.domainMinSetFillDefault ?? "round_robin",
   };
   const evalConfig = { ownerDefault: config.ownerDefault, environmentDefault: config.environmentDefault };
+  const evaluateOptions: EvaluateOptions = {
+    evalSpecGrounding: config.evalSpecGrounding ?? env.evalSpecGroundingDefault ?? "warn",
+    evalTraceability: config.evalTraceability ?? env.evalTraceabilityDefault ?? "warn",
+  };
 
   const batches = chunkArray(scopedChecklist, env.llmGenBatchSize);
   const totalBatches = batches.length;
@@ -382,6 +395,7 @@ async function runOrchestrationBody(
       testCases: allTestCases,
       resolvedSkill: resolved,
       config: evalConfig,
+      evaluateOptions,
     },
     eventBus,
     agentConfig,
@@ -450,6 +464,7 @@ async function runOrchestrationBody(
         testCases: allTestCases,
         resolvedSkill: resolved,
         config: evalConfig,
+        evaluateOptions,
       },
       eventBus,
       agentConfig,
@@ -534,6 +549,13 @@ async function runOrchestrationBody(
     stats: finalStats,
     evaluationIssues: lastEvalResult?.data?.issues ?? [],
   };
+
+  if (debugRoot) {
+    await writePipelineDebugJson(debugRoot, pipelineId, "artifacts/pipeline-result.json", {
+      savedAt: new Date().toISOString(),
+      ...result,
+    });
+  }
 
   completeExecution(pipelineId, result);
   emitPipelineFinished(pipelineId);

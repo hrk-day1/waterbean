@@ -1,6 +1,12 @@
 import type { ChecklistItem, TcType, TestCase, TestPoint } from "../types/tc.js";
 import { TC_TYPES } from "../types/tc.js";
-import type { EvaluationIssue, EvaluationResult, PipelineStats } from "../types/pipeline.js";
+import type {
+  EvaluateOptions,
+  EvaluationIssue,
+  EvaluationResult,
+  EvaluatorGateMode,
+  PipelineStats,
+} from "../types/pipeline.js";
 import type { ResolvedSkill } from "../skills/resolved-skill.js";
 import { isPipelineGlobalCommonTc } from "./generator.js";
 import { deriveTestPointsForChecklist } from "./test-points.js";
@@ -11,11 +17,32 @@ const VALID_TYPES = new Set<string>(TC_TYPES);
 
 const BLOCKING_ISSUE_TYPES = new Set(["schema", "required_field", "coverage", "test_point_missing"]);
 
+const DEFAULT_EVALUATE_OPTIONS: EvaluateOptions = {
+  evalSpecGrounding: "warn",
+  evalTraceability: "warn",
+};
+
+function resolveEvaluateOptions(overrides?: EvaluateOptions): EvaluateOptions {
+  return {
+    evalSpecGrounding: overrides?.evalSpecGrounding ?? DEFAULT_EVALUATE_OPTIONS.evalSpecGrounding,
+    evalTraceability: overrides?.evalTraceability ?? DEFAULT_EVALUATE_OPTIONS.evalTraceability,
+  };
+}
+
+function issueIsBlocking(issue: EvaluationIssue, opts: EvaluateOptions): boolean {
+  if (BLOCKING_ISSUE_TYPES.has(issue.type)) return true;
+  if (issue.type === "spec_ungrounded") return opts.evalSpecGrounding === "block";
+  if (issue.type === "traceability_mismatch") return opts.evalTraceability === "block";
+  return false;
+}
+
 export function evaluate(
   checklist: ChecklistItem[],
   testCases: TestCase[],
   resolved: ResolvedSkill,
+  evaluateOptions?: EvaluateOptions,
 ): EvaluationResult {
+  const opts = resolveEvaluateOptions(evaluateOptions);
   const issues: EvaluationIssue[] = [];
 
   validateSchema(testCases, issues);
@@ -25,9 +52,13 @@ export function evaluate(
   validateTestPointCoverage(checklist, testCases, issues);
   validateDuplicates(testCases, issues);
 
+  const byReqId = buildChecklistByRequirementId(checklist);
+  validateTraceabilityAlignment(testCases, byReqId, issues, opts.evalTraceability);
+  validateSpecGrounding(testCases, byReqId, issues, opts.evalSpecGrounding);
+
   const stats = buildStats(testCases, domainDist, checklist);
 
-  const hasBlockingIssues = issues.some((i) => BLOCKING_ISSUE_TYPES.has(i.type));
+  const hasBlockingIssues = issues.some((i) => issueIsBlocking(i, opts));
 
   return {
     passed: !hasBlockingIssues && uncoveredItems.length === 0,
@@ -145,6 +176,143 @@ function validateDomainMinSets(
 
 function splitReqIds(raw: string): string[] {
   return raw.split(",").map((id) => id.trim()).filter(Boolean);
+}
+
+function buildChecklistByRequirementId(checklist: ChecklistItem[]): Map<string, ChecklistItem> {
+  const m = new Map<string, ChecklistItem>();
+  for (const c of checklist) {
+    if (!m.has(c.requirementId)) m.set(c.requirementId, c);
+  }
+  return m;
+}
+
+function parseTraceabilityRows(raw: string): number[] {
+  return [...raw.matchAll(/R\s*(\d+)/gi)].map((m) => parseInt(m[1]!, 10));
+}
+
+function linkedChecklistItems(tc: TestCase, byReqId: Map<string, ChecklistItem>): ChecklistItem[] {
+  const out: ChecklistItem[] = [];
+  for (const reqId of splitReqIds(tc.Requirement_ID)) {
+    const item = byReqId.get(reqId);
+    if (item) out.push(item);
+  }
+  return out;
+}
+
+interface SpecGroundingRule {
+  id: string;
+  tcPattern: RegExp;
+  specPattern: RegExp;
+  skipIfAnyPaymentDomain?: boolean;
+}
+
+const SPEC_GROUNDING_RULES: SpecGroundingRule[] = [
+  { id: "webhook", tcPattern: /webhook|웹훅/i, specPattern: /webhook|웹훅/i },
+  { id: "idempotency", tcPattern: /멱등|idempot/i, specPattern: /멱등|idempot/i },
+  {
+    id: "pg_vendor",
+    tcPattern: /토스페이먼츠|toss\s*payments|아임포트|iamport|이니시스|나이스페이|nice\s*pay|stripe|paypal/i,
+    specPattern:
+      /토스|아임포트|이니시스|나이스|stripe|paypal|\bPG\b|pg사|실결제|payment\s*gateway|결제\s*게이트웨이/i,
+  },
+  {
+    id: "batch",
+    tcPattern: /배치\s*잡|batch\s*job|\bcron\b|크론|스케줄러|scheduler/i,
+    specPattern: /배치|batch|\bcron\b|크론|스케줄러|scheduler/i,
+  },
+  {
+    id: "refund_flow",
+    tcPattern: /환불\s*(처리|요청|완료)|전액\s*환불|부분\s*환불/i,
+    specPattern: /환불|refund/i,
+  },
+  {
+    id: "pg_generic",
+    tcPattern: /\bPG\b|pg\s*연동|payment\s*gateway|결제\s*게이트웨이/i,
+    specPattern: /\bPG\b|실결제|웹훅|멱등|결제\s*게이트웨이|payment\s*gateway|pg\s*연동/i,
+    skipIfAnyPaymentDomain: true,
+  },
+];
+
+function specTextNormalized(items: ChecklistItem[]): string {
+  if (items.length === 0) return "";
+  return normalizeText(
+    items
+      .map((i) => [i.description, i.feature, (i.featureTypes ?? []).join(" ")].join(" "))
+      .join(" "),
+  );
+}
+
+function tcBodyNormalized(tc: TestCase): string {
+  return normalizeText(`${tc.Feature} ${tc.Scenario} ${tc.Test_Steps} ${tc.Expected_Result}`);
+}
+
+function validateTraceabilityAlignment(
+  testCases: TestCase[],
+  byReqId: Map<string, ChecklistItem>,
+  issues: EvaluationIssue[],
+  mode: EvaluatorGateMode,
+): void {
+  if (mode === "off") return;
+
+  for (const tc of testCases) {
+    if (isPipelineGlobalCommonTc(tc)) continue;
+    const rows = parseTraceabilityRows(tc.Traceability);
+    if (rows.length === 0) continue;
+
+    const expectedRows = new Set<number>();
+    for (const reqId of splitReqIds(tc.Requirement_ID)) {
+      const item = byReqId.get(reqId);
+      if (item) expectedRows.add(item.sourceRow);
+    }
+    if (expectedRows.size === 0) continue;
+
+    const rowSet = new Set(rows);
+    const missing = [...expectedRows].filter((r) => !rowSet.has(r));
+    if (missing.length > 0) {
+      issues.push({
+        type: "traceability_mismatch",
+        message: `${tc.TC_ID}: Traceability(${tc.Traceability})에 체크리스트 기대 행 R${missing.join(", R")} 없음`,
+        details: { tcId: tc.TC_ID, traceability: tc.Traceability, missingRows: missing },
+      });
+    }
+  }
+}
+
+function validateSpecGrounding(
+  testCases: TestCase[],
+  byReqId: Map<string, ChecklistItem>,
+  issues: EvaluationIssue[],
+  mode: EvaluatorGateMode,
+): void {
+  if (mode === "off") return;
+
+  for (const tc of testCases) {
+    if (isPipelineGlobalCommonTc(tc)) continue;
+
+    const items = linkedChecklistItems(tc, byReqId);
+    if (items.length === 0) continue;
+
+    const specNorm = specTextNormalized(items);
+    const tcNorm = tcBodyNormalized(tc);
+    const violated: string[] = [];
+
+    for (const rule of SPEC_GROUNDING_RULES) {
+      if (rule.skipIfAnyPaymentDomain && items.some((i) => i.domain === "Payment")) {
+        continue;
+      }
+      if (rule.tcPattern.test(tcNorm) && !rule.specPattern.test(specNorm)) {
+        violated.push(rule.id);
+      }
+    }
+
+    if (violated.length > 0) {
+      issues.push({
+        type: "spec_ungrounded",
+        message: `${tc.TC_ID}: TC 본문에 기능설명·기능명에 없는 주제가 포함됨 (${violated.join(", ")})`,
+        details: { tcId: tc.TC_ID, themes: violated, requirementIds: splitReqIds(tc.Requirement_ID) },
+      });
+    }
+  }
 }
 
 function validateCoverage(

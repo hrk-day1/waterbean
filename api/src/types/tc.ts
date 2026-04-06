@@ -62,6 +62,9 @@ export const FEATURE_TYPES = [
 
 export type FeatureType = (typeof FEATURE_TYPES)[number];
 
+/** 스펙 휴리스틱 기반 — 고위험 행은 TC 포인트·상한·프롬프트 상세도 확대 */
+export type SpecRiskTier = "high" | "standard";
+
 export interface TestCase {
   TC_ID: string;
   Feature: string;
@@ -99,6 +102,8 @@ export interface ChecklistItem {
   precondition?: string;
   /** @migration Phase 2 이후 FeatureItem으로 분리 예정 — 대분류 > 중분류 > 소분류 */
   categoryPath?: string;
+  /** 미설정 시 deriveTestPoints 등에서 기능명·설명으로 재추론 가능 */
+  specRiskTier?: SpecRiskTier;
 }
 
 export interface TestPoint {

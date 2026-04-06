@@ -28,6 +28,10 @@ export function buildPlanPromptPrefix(resolved: ResolvedSkill): string {
 7. **precondition은 비움(생략).** 이 프롬프트에는 사전조건 열이 없음.
 8. categoryPath는 대분류 > 중분류 > 소분류 중 **값이 있는 것만** 이어 붙임(중·소 열이 없거나 비어 있으면 생략).
 
+## 기능목록 근거
+- 체크리스트의 **description(기능설명)·feature(기능명)·분류 경로**에 **명시되지 않은** PG 결제, 배치·스케줄, 외부 연동, 승인·반려, 삭제·해지, 환불·웹훅 등 **새 액션·시스템을 상상해 넣지 말 것**.
+- featureTypes는 위 텍스트와 **모순되지 않게**만 부여한다(예: 조회만인 설명에 결제·외부연동 유형을 붙이지 않음).
+
 ## 기능 유형 (featureTypes)
 허용: ${JSON.stringify([...FEATURE_TYPES])}
 기준: 조회=목록·상세·검색·필터 | 등록=추가·작성 | 수정=편집 | 삭제=제거·해지 | 상태전이=공개/활성 등 전환 | 승인반려 | 권한제어 | 파일처리 | 결제금액 | 스케줄배치 | 외부연동

@@ -21,6 +21,7 @@ interface TypeDistribution {
 interface EvaluationIssue {
   type: string;
   message: string;
+  details?: Record<string, unknown>;
 }
 
 interface PipelineStats {
@@ -49,6 +50,8 @@ export interface PipelineRequest {
   domainScope: string;
   ownerDefault: string;
   environmentDefault: string;
+  /** 요구사항(Requirement_ID)당 생성 TC 상한. API `maxTcPerRequirement`에 매핑 */
+  maxTcPerRequirement: number;
   maxFallbackRounds: number;
   skillId: string;
   implementation?: "deterministic" | "llm";

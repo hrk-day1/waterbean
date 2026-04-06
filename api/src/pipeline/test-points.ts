@@ -1,4 +1,10 @@
 import type { ChecklistItem, FeatureType, TestPoint, TcType } from "../types/tc.js";
+import { inferPaymentPointMode, isReadOnlyFeatureSpec } from "./plan.js";
+import {
+  combinedTextForRisk,
+  deriveHighRiskExtraTemplates,
+  inferSpecRiskTier,
+} from "./spec-risk.js";
 
 interface PointTemplate {
   pointType: string;
@@ -69,6 +75,28 @@ const POINT_RULES: ReadonlyMap<FeatureType, readonly PointTemplate[]> = new Map(
   ]],
 ]);
 
+/** PG/실결제가 아닌 결제·청구 정보 표시 화면용 (승인·환불·중복결제 방지 제외) */
+const PAYMENT_DISPLAY_POINT_RULES: readonly PointTemplate[] = [
+  {
+    pointType: "정보표시",
+    intent: "스펙에 따른 결제·청구 정보가 화면에 올바르게 표시된다",
+    suggestedTcType: "Functional",
+    required: true,
+  },
+  {
+    pointType: "빈또는오류표시",
+    intent: "데이터 없음·로드 실패 등 비정상 시 적절한 안내 또는 빈 상태가 표시된다",
+    suggestedTcType: "Boundary",
+    required: true,
+  },
+  {
+    pointType: "금액표기검증",
+    intent: "금액·통화·기간 등 표시 형식이 스펙과 일치한다",
+    suggestedTcType: "Functional",
+    required: false,
+  },
+];
+
 const MAX_POINTS_PER_FEATURE_TYPE: ReadonlyMap<FeatureType, number> = new Map([
   ["조회", 4],
   ["등록", 4],
@@ -83,25 +111,50 @@ const MAX_POINTS_PER_FEATURE_TYPE: ReadonlyMap<FeatureType, number> = new Map([
   ["외부연동", 3],
 ]);
 
+/** 읽기 전용 스펙일 때 테스트 포인트에 남기는 기능 유형(Phase B: 조회·권한·표시형 결제만). */
+const READONLY_ALLOWED_FEATURE_TYPES = new Set<FeatureType>(["조회", "권한제어", "결제금액"]);
+
 export function deriveTestPoints(
   item: ChecklistItem,
   requiredOnly = true,
 ): TestPoint[] {
-  const featureTypes = item.featureTypes ?? ["조회"];
+  const combinedForPayment = `${item.feature} ${item.description}`;
+  const combinedForRisk = combinedTextForRisk(item);
+  const tier = item.specRiskTier ?? inferSpecRiskTier(combinedForRisk);
+  const includeOptionalTemplates = !requiredOnly || tier === "high";
+  const readOnly = isReadOnlyFeatureSpec(item.feature, item.description);
+  let featureTypes = item.featureTypes ?? ["조회"];
+  if (readOnly) {
+    featureTypes = featureTypes.filter((ft) => READONLY_ALLOWED_FEATURE_TYPES.has(ft));
+    if (featureTypes.length === 0) featureTypes = ["조회"];
+  }
+
   const seen = new Set<string>();
   const points: TestPoint[] = [];
   let seq = 1;
 
   for (const ft of featureTypes) {
-    const templates = POINT_RULES.get(ft);
-    if (!templates) continue;
+    let templates: readonly PointTemplate[] | undefined;
+    let cap = MAX_POINTS_PER_FEATURE_TYPE.get(ft) ?? 3;
 
-    const cap = MAX_POINTS_PER_FEATURE_TYPE.get(ft) ?? 3;
+    if (ft === "결제금액") {
+      const mode = readOnly ? "display" : inferPaymentPointMode(combinedForPayment);
+      if (mode === "display") {
+        templates = PAYMENT_DISPLAY_POINT_RULES;
+        cap = Math.min(cap, 3);
+      } else {
+        templates = POINT_RULES.get(ft);
+      }
+    } else {
+      templates = POINT_RULES.get(ft);
+    }
+
+    if (!templates) continue;
     let count = 0;
 
     for (const tmpl of templates) {
       if (count >= cap) break;
-      if (requiredOnly && !tmpl.required) continue;
+      if (!includeOptionalTemplates && !tmpl.required) continue;
 
       const dedupeKey = `${tmpl.pointType}|${tmpl.suggestedTcType}`;
       if (seen.has(dedupeKey)) continue;
@@ -128,6 +181,22 @@ export function deriveTestPoints(
       suggestedTcType: "Functional",
       required: true,
     });
+  }
+
+  if (tier === "high") {
+    for (const tmpl of deriveHighRiskExtraTemplates(combinedForRisk)) {
+      const dedupeKey = `${tmpl.pointType}|${tmpl.suggestedTcType}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      points.push({
+        id: `${item.id}-TP-${String(seq++).padStart(2, "0")}`,
+        featureItemId: item.id,
+        pointType: tmpl.pointType,
+        intent: tmpl.intent,
+        suggestedTcType: tmpl.suggestedTcType,
+        required: tmpl.required,
+      });
+    }
   }
 
   return points;

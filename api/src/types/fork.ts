@@ -14,6 +14,7 @@ export interface ForkRequest {
   ownerDefault: string;
   environmentDefault: string;
   maxTcPerRequirement?: number;
+  highRiskMaxTcPerRequirement?: number;
   variants: ForkVariant[];
 }
 

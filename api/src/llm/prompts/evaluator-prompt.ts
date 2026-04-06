@@ -81,6 +81,12 @@ ${JSON.stringify(tcSample, null, 2)}
 6. Traceability: "R{sourceRow}".
 7. Notes(${TC_KEY_MAP.Notes})는 특이사항이 있을 때만 작성하고, 없으면 생략하세요.
 
+## 출력 시 생략 가능한 축약 키 (completion 토큰 절약)
+- **f(Feature), ev(Environment), ow(Owner)** 는 ntc 항목에서 **생략 가능**합니다. 서버가 체크리스트 **tr·ri** 및 기본값(Environment "${config.environmentDefault}", Owner "${config.ownerDefault}")으로 채웁니다.
+- **tr(Traceability)는 반드시 포함**하세요. f 생략 시 tr로 Feature를 복원합니다.
+- **st, ac** 생략 시 서버가 Draft / N.
+- **ti(TC_ID)는 반드시 포함**하세요.
+
 ## 출력 형식
 토큰 절약을 위해 **축약 키**를 사용하세요.
 키 매핑: ${keyMappingTable(TC_KEY_MAP)}

@@ -17,6 +17,7 @@ const DOMAIN_KEYS = ["all", "auth", "payment", "content", "membership", "communi
 const DOMAIN_VALUES = ["ALL", "AUTH", "PAY", "CONTENT", "MEMBERSHIP", "COMMUNITY", "CREATOR", "ADMIN"] as const;
 
 const FALLBACK_KEYS = ["0", "1", "2", "3"] as const;
+const MAX_TC_PER_REQ_KEYS = ["1", "2", "3", "4", "5", "6"] as const;
 
 export function PipelinePage() {
   const { t } = useTranslation();
@@ -33,6 +34,15 @@ export function PipelinePage() {
     [t],
   );
 
+  const maxTcPerReqOptions = useMemo(
+    () =>
+      MAX_TC_PER_REQ_KEYS.map((key) => ({
+        value: key,
+        label: t(`pipeline.maxTcPerRequirement.${key}`, `${key} TC`),
+      })),
+    [t],
+  );
+
   const [url, setUrl] = useState("");
   const [sheetName, setSheetName] = useState("QA_TC_Master");
   const [domainMode, setDomainMode] = useState<"preset" | "discovered">("preset");
@@ -40,6 +50,7 @@ export function PipelinePage() {
   const [owner, setOwner] = useState("TBD");
   const [env, setEnv] = useState("WEB-CHROME");
   const [fallback, setFallback] = useState("2");
+  const [maxTcPerRequirement, setMaxTcPerRequirement] = useState("2");
   const [skillId, setSkillId] = useState("default");
   const [implementation, setImplementation] = useState<"deterministic" | "llm">("llm");
   const [mergeSimilar, setMergeSimilar] = useState<"false" | "true">("false");
@@ -57,6 +68,7 @@ export function PipelinePage() {
       domainScope: domain,
       ownerDefault: owner,
       environmentDefault: env,
+      maxTcPerRequirement: Number(maxTcPerRequirement),
       maxFallbackRounds: Number(fallback),
       skillId,
       implementation,
@@ -93,7 +105,7 @@ export function PipelinePage() {
             required
           />
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <Input
               id="sheetName"
               label={t("pipeline.label.sheetName")}
@@ -128,6 +140,13 @@ export function PipelinePage() {
               options={fallbackOptions}
               value={fallback}
               onChange={(e) => setFallback(e.target.value)}
+            />
+            <Select
+              id="maxTcPerRequirement"
+              label={t("pipeline.label.maxTcPerRequirement")}
+              options={maxTcPerReqOptions}
+              value={maxTcPerRequirement}
+              onChange={(e) => setMaxTcPerRequirement(e.target.value)}
             />
           </div>
           {domainMode === "discovered" && (

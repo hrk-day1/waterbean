@@ -1,4 +1,5 @@
 import type { ChecklistItem, FeatureType } from "../types/tc.js";
+import { enrichChecklistWithSpecRisk } from "./spec-risk.js";
 import { FEATURE_TYPES } from "../types/tc.js";
 import type { ResolvedSkill } from "../skills/resolved-skill.js";
 
@@ -41,12 +42,41 @@ const HEADER_ROW_SIGNAL_PATTERNS: RegExp[] = [
   /^id$/i,
 ];
 
+/** 읽기 전용·수정 불가 문구가 있으면 쓰기 유형(등록/수정/삭제/파일처리)을 infer에서 제거한다. */
+const READONLY_HINT =
+  /수정\s*불가|수정\s*가능\s*항목\s*없음|수정\s*가능\s*없음|수정\s*항목\s*없음|읽기\s*전용|조회\s*전용|편집\s*불가|열람\s*전용|조회만\s*가능/i;
+
+function normalizeTextForReadonlyCheck(raw: string): string {
+  return raw.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * 기능명·기능설명에 읽기 전용·수정 불가 힌트가 있으면 true.
+ * `inferFeatureTypes`와 동일한 `READONLY_HINT`를 사용한다(테스트 포인트 필터 등).
+ */
+export function isReadOnlyFeatureSpec(feature: string, description: string): boolean {
+  return READONLY_HINT.test(normalizeTextForReadonlyCheck(`${feature} ${description}`));
+}
+
+const WRITE_FEATURE_TYPES: ReadonlySet<FeatureType> = new Set([
+  "등록",
+  "수정",
+  "삭제",
+  "파일처리",
+]);
+
+/** 구독/결제 해지 등 — 레코드 삭제 TC로 가지 않게 삭제 키워드에서 제외, 상태전이로 흡수 */
+const CANCEL_HIRE_CONTEXT = /갱신\s*해지|구독\s*해지|결제\s*해지|멤버십\s*해지|해지\s*처리|해지\s*버튼|해지\s*확인/i;
+
 const FEATURE_TYPE_KEYWORDS: ReadonlyMap<FeatureType, RegExp> = new Map<FeatureType, RegExp>([
   ["조회", /조회|검색|목록|리스트|상세|보기|view|list|search|detail|select|필터|정렬/i],
   ["등록", /등록|생성|추가|작성|신규|create|add|insert|new|write/i],
   ["수정", /수정|변경|편집|업데이트|갱신|update|edit|modify|change/i],
-  ["삭제", /삭제|제거|취소등록|해지|remove|delete|drop/i],
-  ["상태전이", /상태\s*변경|상태\s*전이|전환|활성화|비활성|공개|비공개|예약|노출|숨김|승인.*취소|취소.*환불/i],
+  ["삭제", /삭제|제거|취소등록|remove|delete|drop/i],
+  [
+    "상태전이",
+    /상태\s*변경|상태\s*전이|전환|활성화|비활성|공개|비공개|예약|노출|숨김|승인.*취소|취소.*환불|구독\s*해지|갱신\s*해지|결제\s*해지|멤버십\s*해지|해지\s*처리|해지\s*버튼|해지\s*확인/i,
+  ],
   ["승인반려", /승인|반려|거절|심사|검수|요청.*처리|approve|reject|review/i],
   ["권한제어", /권한|역할|role|permission|접근\s*제어|읽기전용|관리자|운영자/i],
   ["파일처리", /파일|업로드|다운로드|첨부|이미지|미디어|썸네일|upload|download|attach/i],
@@ -57,12 +87,47 @@ const FEATURE_TYPE_KEYWORDS: ReadonlyMap<FeatureType, RegExp> = new Map<FeatureT
 
 const FEATURE_TYPE_SET = new Set<string>(FEATURE_TYPES);
 
+export type PaymentPointMode = "display" | "transaction";
+
+/**
+ * 결제 관련 기능에 대해 테스트 포인트를 PG/실결제(transaction) vs 화면 표시(display) 중 어디에 둘지 판별한다.
+ */
+export function inferPaymentPointMode(text: string): PaymentPointMode {
+  const t = text;
+  const transactionSignals =
+    /PG|웹훅|멱등|결제\s*승인|결제\s*수단|카드\s*결제|포트원|토스페이먼츠|\b토스\b|잔액\s*부족|결제\s*취소|결제\s*실패|환불\s*요청|payment\s*intent|capture/i.test(
+      t,
+    );
+  if (transactionSignals) return "transaction";
+
+  const displaySignals =
+    /결제\s*정보|기본\s*정보|상세\s*페이지|상세\s*화면|결제\s*상품\s*상세|청구|영수증|표시\s*영역|조회\s*중심|정보\s*영역/i.test(
+      t,
+    );
+  if (displaySignals) return "display";
+
+  return "transaction";
+}
+
 export function inferFeatureTypes(text: string): FeatureType[] {
   const matched: FeatureType[] = [];
   for (const [ft, re] of FEATURE_TYPE_KEYWORDS) {
     if (re.test(text)) matched.push(ft);
   }
-  return matched.length > 0 ? matched : ["조회"];
+
+  let result: FeatureType[] = matched.length > 0 ? matched : ["조회"];
+
+  if (isReadOnlyFeatureSpec("", text)) {
+    result = result.filter((ft) => !WRITE_FEATURE_TYPES.has(ft));
+    if (result.length === 0) result = ["조회"];
+  }
+
+  if (CANCEL_HIRE_CONTEXT.test(text)) {
+    result = result.filter((ft) => ft !== "수정");
+    if (result.length === 0) result = ["조회"];
+  }
+
+  return result;
 }
 
 export function isValidFeatureType(value: string): value is FeatureType {
@@ -401,5 +466,5 @@ export function buildChecklist(
     console.log(`[plan] feature-type stats: ${statsStr} (total ${checklist.length} items)`);
   }
 
-  return checklist;
+  return enrichChecklistWithSpecRisk(checklist);
 }

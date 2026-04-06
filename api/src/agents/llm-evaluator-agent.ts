@@ -7,6 +7,7 @@ import { evaluate } from "../pipeline/evaluator.js";
 import { generateJson } from "../llm/gemini-client.js";
 import { buildRepairPrompt } from "../llm/prompts/evaluator-prompt.js";
 import { expandKeys, TC_KEY_MAP } from "../llm/key-mapping.js";
+import { enrichTestCasesFromChecklist } from "../pipeline/tc-enrich.js";
 import type { Agent } from "./registry.js";
 import type { AgentResult, SubAgentConfig } from "./types.js";
 import type { eventBus } from "./event-bus.js";
@@ -54,7 +55,7 @@ const CompactRepairResponseSchema = z.object({
   ntc: z.array(
     z.object({
       [rm.TC_ID]: z.string(),
-      [rm.Feature]: z.string(),
+      [rm.Feature]: z.string().optional(),
       [rm.Requirement_ID]: z.string(),
       [rm.Scenario]: z.string(),
       [rm.Precondition]: z.string(),
@@ -64,10 +65,10 @@ const CompactRepairResponseSchema = z.object({
       [rm.Priority]: z.enum(["P0", "P1", "P2"]),
       [rm.Severity]: z.enum(["S1", "S2", "S3"]),
       [rm.Type]: z.enum(TC_TYPES as unknown as [string, ...string[]]),
-      [rm.Environment]: z.string(),
-      [rm.Owner]: z.string(),
-      [rm.Status]: z.string(),
-      [rm.Automation_Candidate]: z.string(),
+      [rm.Environment]: z.string().optional(),
+      [rm.Owner]: z.string().optional(),
+      [rm.Status]: z.string().optional(),
+      [rm.Automation_Candidate]: z.string().optional(),
       [rm.Traceability]: z.string(),
       [rm.Notes]: z.string().optional(),
     }),
@@ -93,7 +94,7 @@ export class LlmEvaluatorAgent implements Agent<EvaluatorInput, EvaluationResult
     });
 
     try {
-      let evalResult = evaluate(input.checklist, allTcs, input.resolvedSkill);
+      let evalResult = evaluate(input.checklist, allTcs, input.resolvedSkill, input.evaluateOptions);
       let round = 0;
 
       while (
@@ -121,7 +122,8 @@ export class LlmEvaluatorAgent implements Agent<EvaluatorInput, EvaluationResult
         );
 
         const { data: compactResult } = await generateJson(prompt, CompactRepairResponseSchema);
-        const newTcs = expandKeys<TestCase>(compactResult.ntc, TC_KEY_MAP);
+        const expandedRepair = expandKeys<TestCase>(compactResult.ntc, TC_KEY_MAP);
+        const newTcs = enrichTestCasesFromChecklist(expandedRepair, input.checklist, input.config);
 
         if (newTcs.length > 0) {
           const guarded = guardRepairCandidates(allTcs, newTcs);
@@ -131,7 +133,7 @@ export class LlmEvaluatorAgent implements Agent<EvaluatorInput, EvaluationResult
           );
         }
 
-        evalResult = evaluate(input.checklist, allTcs, input.resolvedSkill);
+        evalResult = evaluate(input.checklist, allTcs, input.resolvedSkill, input.evaluateOptions);
       }
 
       bus.emit(config.pipelineId, {
@@ -151,7 +153,7 @@ export class LlmEvaluatorAgent implements Agent<EvaluatorInput, EvaluationResult
       const message = err instanceof Error ? err.message : "Unknown error";
       console.warn(`[llm-eval] LLM repair failed, returning rule-only result: ${message}`);
 
-      const evalResult = evaluate(input.checklist, allTcs, input.resolvedSkill);
+      const evalResult = evaluate(input.checklist, allTcs, input.resolvedSkill, input.evaluateOptions);
 
       bus.emit(config.pipelineId, {
         agentId, agentType: "evaluator", status: "completed", progress: 100,

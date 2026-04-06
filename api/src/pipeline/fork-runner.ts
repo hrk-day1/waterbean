@@ -68,6 +68,7 @@ export async function runFork(
         ownerDefault: request.ownerDefault,
         environmentDefault: request.environmentDefault,
         maxTcPerRequirement: request.maxTcPerRequirement,
+        highRiskMaxTcPerRequirement: request.highRiskMaxTcPerRequirement,
         maxFallbackRounds: variant.maxFallbackRounds,
         skillId: variant.skillId,
       };

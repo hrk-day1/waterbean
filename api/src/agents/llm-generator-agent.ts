@@ -10,6 +10,7 @@ import {
   prependGlobalTemplatesAndRenumber,
 } from "../pipeline/generator.js";
 import { deriveTestPointsForChecklist } from "../pipeline/test-points.js";
+import { enrichTestCasesFromChecklist } from "../pipeline/tc-enrich.js";
 import type { Agent } from "./registry.js";
 import type { AgentResult, SubAgentConfig } from "./types.js";
 import type { eventBus } from "./event-bus.js";
@@ -19,7 +20,8 @@ const m = TC_KEY_MAP;
 const CompactTestCaseSchema = z.array(
   z.object({
     [m.TC_ID]: z.string(),
-    [m.Feature]: z.string(),
+    /** 생략 시 Traceability·체크리스트로 서버 병합 */
+    [m.Feature]: z.string().optional(),
     [m.Requirement_ID]: z.string(),
     [m.Scenario]: z.string(),
     [m.Precondition]: z.string(),
@@ -29,10 +31,10 @@ const CompactTestCaseSchema = z.array(
     [m.Priority]: z.enum(["P0", "P1", "P2"]),
     [m.Severity]: z.enum(["S1", "S2", "S3"]),
     [m.Type]: z.enum(TC_TYPES as unknown as [string, ...string[]]),
-    [m.Environment]: z.string(),
-    [m.Owner]: z.string(),
-    [m.Status]: z.string(),
-    [m.Automation_Candidate]: z.string(),
+    [m.Environment]: z.string().optional(),
+    [m.Owner]: z.string().optional(),
+    [m.Status]: z.string().optional(),
+    [m.Automation_Candidate]: z.string().optional(),
     [m.Traceability]: z.string(),
     [m.Notes]: z.string().optional(),
   }),
@@ -67,6 +69,21 @@ function normalizeScenario(scenario: string): string {
   return scenario.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+/** 동일 Requirement_ID에 high·standard 행이 섞이면 더 큰 상한(high)을 쓴다. */
+function requirementMaxTcCaps(
+  items: ChecklistItem[],
+  baseCap: number,
+  highCap: number,
+): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const it of items) {
+    const rowCap = it.specRiskTier === "high" ? highCap : baseCap;
+    const rid = it.requirementId;
+    m.set(rid, Math.max(m.get(rid) ?? baseCap, rowCap));
+  }
+  return m;
+}
+
 export class LlmGeneratorAgent implements Agent<GeneratorInput, TestCase[]> {
   readonly type = "generator" as const;
 
@@ -98,7 +115,9 @@ export class LlmGeneratorAgent implements Agent<GeneratorInput, TestCase[]> {
           const domainTcs: TestCase[] = [];
           const reqCount = new Map<string, number>();
           const seenScenario = new Set<string>();
-          const maxPerReq = input.config.maxTcPerRequirement ?? 2;
+          const baseCap = input.config.maxTcPerRequirement ?? 2;
+          const highCap = input.config.highRiskMaxTcPerRequirement ?? Math.max(baseCap, 6);
+          const reqMaxTc = requirementMaxTcCaps(items, baseCap, highCap);
           const domainReqIds = new Set(items.map((item) => item.requirementId));
           let droppedByCap = 0;
           let droppedByDup = 0;
@@ -118,7 +137,11 @@ export class LlmGeneratorAgent implements Agent<GeneratorInput, TestCase[]> {
             console.log(
               `[llm-gen] domain=${domain} chunk=${chunkIndex}/${chunks.length} checklistItems=${chunk.length} roundTripMs=${chunkUsage.roundTripMs ?? "?"} totalTok=${chunkUsage.totalTokens} (prompt=${chunkUsage.promptTokens} completion=${chunkUsage.completionTokens})`,
             );
-            const generatedTcs = expandKeys<TestCase>(compactTcs, TC_KEY_MAP);
+            const expanded = expandKeys<TestCase>(compactTcs, TC_KEY_MAP);
+            const generatedTcs = enrichTestCasesFromChecklist(expanded, items, {
+              ownerDefault: input.config.ownerDefault,
+              environmentDefault: input.config.environmentDefault,
+            });
             const acceptedTcs: TestCase[] = [];
 
             for (const tc of generatedTcs) {
@@ -135,9 +158,10 @@ export class LlmGeneratorAgent implements Agent<GeneratorInput, TestCase[]> {
                 continue;
               }
 
-              const overCap = scopedReqIds.some((reqId) =>
-                (reqCount.get(reqId) ?? 0) >= maxPerReq,
-              );
+              const overCap = scopedReqIds.some((reqId) => {
+                const cap = reqMaxTc.get(reqId) ?? baseCap;
+                return (reqCount.get(reqId) ?? 0) >= cap;
+              });
               if (overCap) {
                 droppedByCap++;
                 continue;

@@ -1,7 +1,22 @@
 import dotenv from "dotenv";
 import path from "node:path";
+import type { DomainMinSetFillMode, EvaluatorGateMode } from "../types/pipeline.js";
 
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../.env") });
+
+function parseDomainMinSetFill(raw: string | undefined): DomainMinSetFillMode | undefined {
+  if (!raw?.trim()) return undefined;
+  const v = raw.trim().toLowerCase().replace(/-/g, "_");
+  if (v === "round_robin" || v === "representative" || v === "off") return v as DomainMinSetFillMode;
+  return undefined;
+}
+
+function parseEvaluatorGate(raw: string | undefined): EvaluatorGateMode | undefined {
+  if (!raw?.trim()) return undefined;
+  const v = raw.trim().toLowerCase();
+  if (v === "off" || v === "warn" || v === "block") return v;
+  return undefined;
+}
 
 export const env = {
   port: Number(process.env.PORT) || 4000,
@@ -21,4 +36,15 @@ export const env = {
   llmGenBatchSize: Number(process.env.LLM_GEN_BATCH_SIZE) || 20,
   /** 설정 시 Plan/Generator 입출력 JSON을 이 디렉터리 하위 `{pipelineId}/`에 저장 */
   pipelineDebugDir: (process.env.PIPELINE_DEBUG_DIR ?? "").trim(),
+  /** API `domainMinSetFill` 미지정 시 사용. round_robin | representative | off */
+  domainMinSetFillDefault: parseDomainMinSetFill(process.env.PIPELINE_DOMAIN_MINSET_FILL),
+  /** API `evalSpecGrounding` 미지정 시 사용. off | warn | block */
+  evalSpecGroundingDefault: parseEvaluatorGate(process.env.PIPELINE_EVAL_SPEC_GROUNDING),
+  /** API `evalTraceability` 미지정 시 사용. off | warn | block */
+  evalTraceabilityDefault: parseEvaluatorGate(process.env.PIPELINE_EVAL_TRACEABILITY),
+  /** specRiskTier high 행의 요구사항당 TC 상한 기본값 */
+  highRiskMaxTcPerRequirementDefault: Math.max(
+    2,
+    Number(process.env.PIPELINE_HIGH_RISK_MAX_TC_PER_REQUIREMENT) || 6,
+  ),
 } as const;

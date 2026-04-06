@@ -1,0 +1,46 @@
+{
+  "id": "sheet-grounded",
+  "name": "기능목록 근거 스킬",
+  "description": "기능명·기능설명(시트)에 명시된 범위만 TC로 확장하도록 policyHints·domainMinSets를 완화한 프리셋. PG/전역 Security 유도를 줄인다.",
+  "domainKeywords": {
+    "Payment": ["pay", "payment", "refund", "invoice", "billing", "결제", "환불", "정산", "주문"],
+    "Auth": ["login", "auth", "token", "mfa", "password", "인증", "로그인", "세션", "비밀번호"],
+    "Content": ["post", "포스트", "콘텐츠", "게시물", "미디어", "에디터", "썸네일"],
+    "Membership": ["membership", "멤버십", "구독", "상품", "subscription"],
+    "Community": ["comment", "댓글", "커뮤니티", "신고", "게시판", "대댓글"],
+    "Creator": ["creator", "크리에이터", "채널", "프로필"],
+    "Admin": ["admin", "role", "permission", "console", "운영", "권한", "관리자"]
+  },
+  "policyHints": [
+    { "domain": "_common", "hint": "templates/commonTemplates의 steps와 생성 TC의 Test_Steps에는 로그인·메뉴 이동·단순 화면 진입 문구를 매번 넣지 말 것. 계정·역할·초기 화면은 precondition에만 기술한다", "riskLevel": "low" },
+    { "domain": "_common", "hint": "도메인 정책 힌트는 **기능설명·기능명에 해당 주제가 드러날 때만** TC에 반영한다. 시트에 없는 PG·배치·외부연동·권한 시나리오를 임의로 추가하지 않는다.", "riskLevel": "medium" },
+    { "domain": "Payment", "hint": "기능설명에 실결제·PG·승인·환불·웹훅·멱등·결제 실패·타임아웃 등이 **명시된 경우에만** 해당 흐름을 TC에 포함한다. 결제 정보만 표시하는 화면에는 PG 시나리오를 넣지 않는다.", "riskLevel": "medium" },
+    { "domain": "Auth", "hint": "기능설명·기능명에 인증·로그인·세션·토큰·OAuth·콜백·잠금 등이 언급된 경우에만 해당 흐름을 featureTypes·시나리오에 반영한다.", "riskLevel": "medium" },
+    { "domain": "Content", "hint": "기능설명에 게시·공개/비공개·예약·첨부·미디어 등이 명시된 경우에만 상태전이·파일처리 관련 시나리오를 확장한다.", "riskLevel": "medium" },
+    { "domain": "Membership", "hint": "기능설명에 구독·가격·만료·해지 등이 명시된 경우에만 관련 시나리오를 포함한다.", "riskLevel": "medium" },
+    { "domain": "Community", "hint": "기능설명에 댓글·신고·게시판 등이 명시된 경우에만 관련 시나리오를 포함한다.", "riskLevel": "medium" },
+    { "domain": "Creator", "hint": "기능설명에 크리에이터 승인·프로필·연결 정보 등이 명시된 경우에만 관련 시나리오를 포함한다.", "riskLevel": "medium" }
+  ],
+  "domainMinSets": {
+    "Auth": { "Functional": 2, "Negative": 2, "Boundary": 1, "Security": 1, "Regression": 1, "Accessibility": 0 },
+    "Payment": { "Functional": 2, "Negative": 2, "Boundary": 1, "Security": 1, "Regression": 1, "Accessibility": 0 },
+    "Content": { "Functional": 1, "Negative": 1, "Boundary": 0, "Security": 1, "Regression": 1, "Accessibility": 0 },
+    "Membership": { "Functional": 1, "Negative": 1, "Boundary": 1, "Security": 1, "Regression": 1, "Accessibility": 0 },
+    "Community": { "Functional": 1, "Negative": 1, "Boundary": 1, "Security": 1, "Regression": 1, "Accessibility": 0 },
+    "Creator": { "Functional": 1, "Negative": 1, "Boundary": 0, "Security": 1, "Regression": 1, "Accessibility": 0 },
+    "Admin": { "Functional": 1, "Negative": 1, "Boundary": 0, "Security": 1, "Regression": 1, "Accessibility": 0 }
+  },
+  "priorityRules": [
+    { "domain": "Auth", "types": ["Functional", "Security"], "priority": "P0" },
+    { "domain": "Payment", "types": ["Functional", "Security"], "priority": "P0" },
+    { "domain": "Membership", "types": ["Security"], "priority": "P0" },
+    { "domain": "Content", "types": ["Security"], "priority": "P0" },
+    { "domain": "Community", "types": ["Security"], "priority": "P0" },
+    { "domain": "Creator", "types": ["Security"], "priority": "P0" },
+    { "domain": "Admin", "types": ["Security"], "priority": "P0" }
+  ],
+  "severityRules": [
+    { "domain": "Auth", "types": ["Functional"], "severity": "S1" },
+    { "domain": "Payment", "types": ["Functional"], "severity": "S1" }
+  ]
+}

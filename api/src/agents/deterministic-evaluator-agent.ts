@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { ChecklistItem, TestCase } from "../types/tc.js";
-import type { EvaluationResult } from "../types/pipeline.js";
+import type { EvaluateOptions, EvaluationResult } from "../types/pipeline.js";
 import type { ResolvedSkill } from "../skills/resolved-skill.js";
 import { evaluate } from "../pipeline/evaluator.js";
 import type { Agent } from "./registry.js";
@@ -12,6 +12,8 @@ export interface EvaluatorInput {
   testCases: TestCase[];
   resolvedSkill: ResolvedSkill;
   config: { ownerDefault: string; environmentDefault: string };
+  /** 미전달 시 evaluate 내부 기본값(warn) */
+  evaluateOptions?: EvaluateOptions;
 }
 
 export class DeterministicEvaluatorAgent implements Agent<EvaluatorInput, EvaluationResult> {
@@ -31,7 +33,12 @@ export class DeterministicEvaluatorAgent implements Agent<EvaluatorInput, Evalua
     });
 
     try {
-      const result = evaluate(input.checklist, input.testCases, input.resolvedSkill);
+      const result = evaluate(
+        input.checklist,
+        input.testCases,
+        input.resolvedSkill,
+        input.evaluateOptions,
+      );
 
       bus.emit(config.pipelineId, {
         agentId, agentType: "evaluator", status: "completed", progress: 100,

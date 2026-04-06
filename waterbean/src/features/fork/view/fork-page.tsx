@@ -15,6 +15,7 @@ import { Info, Loader2, Plus, Trash2 } from "lucide-react";
 const FORK_DOMAIN_VALUES = ["ALL", "AUTH", "PAY", "CONTENT", "MEMBERSHIP", "COMMUNITY", "CREATOR", "ADMIN"] as const;
 const FORK_DOMAIN_KEYS = ["all", "auth", "payment", "content", "membership", "community", "creator", "admin"] as const;
 const FORK_FALLBACK_KEYS = ["0", "1", "2", "3"] as const;
+const FORK_MAX_TC_KEYS = ["1", "2", "3", "4", "5", "6"] as const;
 
 interface VariantForm {
   label: string;
@@ -44,10 +45,20 @@ export function ForkPage() {
     [t],
   );
 
+  const maxTcPerReqOptions = useMemo(
+    () =>
+      FORK_MAX_TC_KEYS.map((key) => ({
+        value: key,
+        label: t(`pipeline.maxTcPerRequirement.${key}`, `${key} TC`),
+      })),
+    [t],
+  );
+
   const [url, setUrl] = useState("");
   const [baseSheet, setBaseSheet] = useState("QA_TC_Fork");
   const [owner, setOwner] = useState("TBD");
   const [env, setEnv] = useState("WEB-CHROME");
+  const [maxTcPerRequirement, setMaxTcPerRequirement] = useState("2");
   const [variants, setVariants] = useState<VariantForm[]>([
     createVariant("A", "default"),
     createVariant("B", skills[1]?.id ?? "default"),
@@ -79,6 +90,7 @@ export function ForkPage() {
       baseSheetName: baseSheet,
       ownerDefault: owner,
       environmentDefault: env,
+      maxTcPerRequirement: Number(maxTcPerRequirement),
       variants: variants.map((v) => ({
         label: v.label,
         skillId: v.skillId,
@@ -115,7 +127,7 @@ export function ForkPage() {
             required
           />
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Input
               id="fork-baseSheet"
               label={t("fork.label.baseSheet")}
@@ -133,6 +145,13 @@ export function ForkPage() {
               label={t("fork.label.environment")}
               value={env}
               onChange={(e) => setEnv(e.target.value)}
+            />
+            <Select
+              id="fork-maxTcPerRequirement"
+              label={t("fork.label.maxTcPerRequirement")}
+              options={maxTcPerReqOptions}
+              value={maxTcPerRequirement}
+              onChange={(e) => setMaxTcPerRequirement(e.target.value)}
             />
           </div>
 

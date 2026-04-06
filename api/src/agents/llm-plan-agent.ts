@@ -16,6 +16,7 @@ import {
   projectRowToTcSourceFields,
   resolveSourceSheetColumns,
 } from "../pipeline/plan.js";
+import { enrichChecklistWithSpecRisk } from "../pipeline/spec-risk.js";
 import { env } from "../config/env.js";
 import type { Agent } from "./registry.js";
 import type { AgentResult, SubAgentConfig } from "./types.js";
@@ -222,7 +223,7 @@ export class LlmPlanAgent implements Agent<PlanInput, ChecklistItem[]> {
       }
 
       const reindexed = reassignIds(allRaw);
-      const checklist = validateAndFillFeatureTypes(reindexed);
+      const checklist = enrichChecklistWithSpecRisk(validateAndFillFeatureTypes(reindexed));
       const classifiedCount = checklist.filter((c) => c.featureTypes && c.featureTypes.length > 0).length;
       const totalUsage = sumUsage(usages);
 

@@ -25,11 +25,15 @@ const RunRequestSchema = z
     ownerDefault: z.string().default("TBD"),
     environmentDefault: z.string().default("WEB-CHROME"),
     maxTcPerRequirement: z.number().int().positive().optional(),
+    highRiskMaxTcPerRequirement: z.number().int().positive().optional(),
     maxFallbackRounds: z.number().int().min(0).max(5).default(2),
     skillId: z.string().default("default"),
     implementation: z.enum(["deterministic", "llm"]).default("llm"),
     maxLlmRounds: z.number().int().min(0).max(5).default(3),
     mergeSimilarTestCases: z.boolean().default(false),
+    domainMinSetFill: z.enum(["round_robin", "representative", "off"]).optional(),
+    evalSpecGrounding: z.enum(["off", "warn", "block"]).optional(),
+    evalTraceability: z.enum(["off", "warn", "block"]).optional(),
   })
   .superRefine((val, ctx) => {
     if (val.domainMode === "discovered" && val.domainScope !== "ALL") {
@@ -150,6 +154,28 @@ pipelineRouter.get("/agents", (_req, res) => {
   res.json(listAgents());
 });
 
+/** Phase C: 알림 연동 스켈레톤(실제 웹훅 전송 없음, 검증·로깅만). */
+const NotifyRequestSchema = z.object({
+  event: z.enum(["pipeline_completed", "ping"]),
+  pipelineId: z.string().optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+});
+
+pipelineRouter.post("/notify", (req, res) => {
+  const parsed = NotifyRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+  console.log("[pipeline/notify] skeleton accept:", JSON.stringify(parsed.data));
+  res.json({
+    accepted: true,
+    delivered: false,
+    message:
+      "Phase C skeleton: outbound webhook not implemented. Subscribe via SSE or poll GET /pipeline/run/:id/result.",
+  });
+});
+
 const ForkVariantSchema = z.object({
   label: z.string().min(1),
   skillId: z.string().default("default"),
@@ -165,6 +191,7 @@ const ForkRequestSchema = z
     ownerDefault: z.string().default("TBD"),
     environmentDefault: z.string().default("WEB-CHROME"),
     maxTcPerRequirement: z.number().int().positive().optional(),
+    highRiskMaxTcPerRequirement: z.number().int().positive().optional(),
     variants: z.array(ForkVariantSchema).min(2).max(5),
   })
   .superRefine((data, ctx) => {

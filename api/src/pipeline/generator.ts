@@ -2,15 +2,19 @@ import type { ChecklistItem, Priority, Severity, TestCase, TestPoint, TcType } f
 import { TC_TYPES } from "../types/tc.js";
 import type { TcTemplate } from "../skills/types.js";
 import type { ResolvedSkill, ResolvedPriorityRule, ResolvedSeverityRule } from "../skills/resolved-skill.js";
+import type { DomainMinSetFillMode } from "../types/pipeline.js";
 import { deriveTestPointsForChecklist } from "./test-points.js";
+import { combinedTextForRisk, inferSpecRiskTier } from "./spec-risk.js";
 
 /** 파이프라인 공통 TC 블록 — 체크리스트 requirementId와 충돌 없음 */
 export const GLOBAL_COMMON_REQUIREMENT_ID = "GLOBAL-COMMON";
 
-interface GeneratorConfig {
+export interface GeneratorConfig {
   ownerDefault: string;
   environmentDefault: string;
   maxTcPerRequirement?: number;
+  highRiskMaxTcPerRequirement?: number;
+  domainMinSetFill?: DomainMinSetFillMode;
 }
 
 const EXPECTED_RESULT_MAX_LEN = 200;
@@ -92,8 +96,8 @@ function buildPreconditionForTestPoint(item: ChecklistItem, navigationFromSpec: 
   return compactPreconditionChunk(chunks.join(" | "), PRECONDITION_MAX_LEN);
 }
 
-function buildExpectedFromSpec(intent: string, description: string): string {
-  const specBits = extractSpecStepLines(description, 2);
+function buildExpectedFromSpec(intent: string, description: string, maxSpecLines: number): string {
+  const specBits = extractSpecStepLines(description, maxSpecLines);
   if (specBits.length === 0) return intent;
   const quoted = specBits.map((s) => `「${s.length > 80 ? `${s.slice(0, 77)}…` : s}」`).join(", ");
   const merged = `${intent} (${quoted} 기준으로 화면·데이터가 일치한다)`;
@@ -279,6 +283,9 @@ function ensureDomainMinSets(
   resolved: ResolvedSkill,
   startId: number,
 ) {
+  const fillMode: DomainMinSetFillMode = config.domainMinSetFill ?? "round_robin";
+  if (fillMode === "off") return;
+
   let tcCounter = startId;
   const minSetTemplateSigs = new Set<string>();
 
@@ -286,8 +293,16 @@ function ensureDomainMinSets(
     const minSet = resolved.domainMinSets[domain];
     if (!minSet) continue;
 
-    const representative = checklist.find((c) => c.domain === domain);
-    if (!representative) continue;
+    const domainItems = checklist.filter((c) => c.domain === domain);
+    if (domainItems.length === 0) continue;
+
+    let roundRobinIndex = 0;
+    const pickRow = (): ChecklistItem => {
+      if (fillMode === "representative") return domainItems[0]!;
+      const row = domainItems[roundRobinIndex % domainItems.length]!;
+      roundRobinIndex += 1;
+      return row;
+    };
 
     const templates: TcTemplate[] = resolved.templates[domain] ?? [];
     const domainCountsFor = counts[domain] ?? (counts[domain] = emptyDomainTypeCounts());
@@ -307,6 +322,7 @@ function ensureDomainMinSets(
         if (minSetTemplateSigs.has(sig)) continue;
         minSetTemplateSigs.add(sig);
 
+        const representative = pickRow();
         const tcId = `TC-${String(tcCounter++).padStart(4, "0")}`;
 
         testCases.push({
@@ -422,11 +438,19 @@ export function generateTestCasesFromTestPoints(
   testCases.push(...globalCases);
   let tcCounter = nextCounter;
 
+  const domainCounts = Object.fromEntries(
+    resolved.domainOrder.map((d) => [d, emptyDomainTypeCounts()]),
+  ) as Record<string, Record<TcType, number>>;
+
   for (const item of checklist) {
     const points = testPointMap.get(item.id) ?? [];
 
+    const tier = item.specRiskTier ?? inferSpecRiskTier(combinedTextForRisk(item));
+    const maxStepLines = tier === "high" ? 8 : 4;
+    const maxSpecLinesForExpected = tier === "high" ? 4 : 2;
+
     for (const tp of points) {
-      const { stepLines, navigationLines } = partitionSpecLinesForSteps(item.description, 4);
+      const { stepLines, navigationLines } = partitionSpecLinesForSteps(item.description, maxStepLines);
       testCases.push({
         TC_ID: `TC-${String(tcCounter++).padStart(4, "0")}`,
         Feature: item.feature,
@@ -435,7 +459,7 @@ export function generateTestCasesFromTestPoints(
         Precondition: buildPreconditionForTestPoint(item, navigationLines),
         Test_Steps: buildStepsFromTestPoint(tp, stepLines),
         Test_Data: "",
-        Expected_Result: buildExpectedFromSpec(tp.intent, item.description),
+        Expected_Result: buildExpectedFromSpec(tp.intent, item.description, maxSpecLinesForExpected),
         Priority: determinePriority(item.domain, tp.suggestedTcType, resolved.priorityRules),
         Severity: determineSeverity(item.domain, tp.suggestedTcType, resolved.severityRules),
         Type: tp.suggestedTcType,
@@ -445,10 +469,15 @@ export function generateTestCasesFromTestPoints(
         Automation_Candidate: "N",
         Traceability: formatTraceability(item.sourceRow),
       });
+
+      const dc = domainCounts[item.domain] ?? (domainCounts[item.domain] = emptyDomainTypeCounts());
+      dc[tp.suggestedTcType]++;
     }
 
     item.covered = true;
   }
+
+  ensureDomainMinSets(testCases, domainCounts, checklist, config, resolved, tcCounter);
 
   return deduplicateTestCases(testCases);
 }

@@ -51,6 +51,8 @@ export interface ForkRequest {
   baseSheetName: string;
   ownerDefault: string;
   environmentDefault: string;
+  /** 모든 변형에 공통 적용. API `maxTcPerRequirement` */
+  maxTcPerRequirement: number;
   variants: ForkVariant[];
 }
 

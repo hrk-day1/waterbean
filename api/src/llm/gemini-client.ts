@@ -1,4 +1,6 @@
 import { GoogleGenerativeAI, type GenerationConfig } from "@google/generative-ai";
+import JSON5 from "json5";
+import { jsonrepair } from "jsonrepair";
 import { z, type ZodSchema } from "zod";
 import { env } from "../config/env.js";
 
@@ -354,6 +356,27 @@ function normalizeLlmParsedJson(parsed: unknown): unknown {
   return coerceNonStringFieldsToString(stringElements);
 }
 
+/** How we recovered when strict `JSON.parse` failed (logged for debugging). */
+type LlmJsonParseFallback = "json5" | "jsonrepair";
+
+/**
+ * Strict parse first; on failure try JSON5 (trailing commas, comments, etc.),
+ * then `jsonrepair` + strict parse (common LLM mistakes such as unescaped `"` in strings).
+ * Zod validation in `generateJson` remains the safety gate.
+ */
+function parseLlmExtractedJson(jsonStr: string): { value: unknown; fallback?: LlmJsonParseFallback } {
+  try {
+    return { value: JSON.parse(jsonStr) };
+  } catch {
+    try {
+      return { value: JSON5.parse(jsonStr), fallback: "json5" };
+    } catch {
+      const repaired = jsonrepair(jsonStr);
+      return { value: JSON.parse(repaired), fallback: "jsonrepair" };
+    }
+  }
+}
+
 export async function generateText(
   prompt: string,
   configOverrides?: Partial<GenerationConfig>,
@@ -378,7 +401,11 @@ export async function generateJson<T>(
 
   let firstParsed: unknown;
   try {
-    firstParsed = normalizeLlmParsedJson(JSON.parse(jsonStr));
+    const { value, fallback } = parseLlmExtractedJson(jsonStr);
+    if (fallback) {
+      console.warn(`[llm] primary JSON used ${fallback} fallback`);
+    }
+    firstParsed = normalizeLlmParsedJson(value);
   } catch (parseErr) {
     logLlmJsonFailure("generateJson JSON.parse (primary)", text, jsonStr, parseErr);
     throw new LlmJsonParseError(
@@ -418,7 +445,11 @@ export async function generateJson<T>(
 
   let secondParsed: unknown;
   try {
-    secondParsed = normalizeLlmParsedJson(JSON.parse(repairJson));
+    const { value, fallback } = parseLlmExtractedJson(repairJson);
+    if (fallback) {
+      console.warn(`[llm] repair JSON used ${fallback} fallback`);
+    }
+    secondParsed = normalizeLlmParsedJson(value);
   } catch (parseErr) {
     logLlmJsonFailure("generateJson JSON.parse (repair)", repair.text, repairJson, parseErr);
     throw new LlmJsonParseError(

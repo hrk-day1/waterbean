@@ -1,14 +1,14 @@
 import crypto from "node:crypto";
 import type { ChecklistItem, TestCase } from "../types/tc.js";
 import type { ResolvedSkill } from "../skills/resolved-skill.js";
-import { generateTestCasesFromTestPoints } from "../pipeline/generator.js";
+import { generateTestCasesFromTestPoints, type GeneratorConfig } from "../pipeline/generator.js";
 import type { Agent } from "./registry.js";
 import type { AgentResult, SubAgentConfig } from "./types.js";
 import type { eventBus } from "./event-bus.js";
 
 export interface GeneratorInput {
   checklist: ChecklistItem[];
-  config: { ownerDefault: string; environmentDefault: string; maxTcPerRequirement?: number };
+  config: GeneratorConfig;
   resolvedSkill: ResolvedSkill;
 }
 
