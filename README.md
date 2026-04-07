@@ -1,13 +1,13 @@
-# Partner Center
+# Waterbean
 
-Google Sheets 기능 목록으로부터 QA Test Case를 자동 생성하는 도구입니다. **Express API**가 파이프라인(Plan · Taxonomy · Generator · Evaluator · Merge 등)을 수행하고, **waterbean**은 파이프라인 실행과 SSE 모니터링용 React UI입니다.
+GitHub 저장소명 **waterbean**. Google Sheets 기능 목록으로부터 QA Test Case를 자동 생성하는 도구입니다. **Express API**가 파이프라인(Plan · Taxonomy · Generator · Evaluator · Merge 등)을 수행하고, **waterbean**은 파이프라인 실행과 SSE 모니터링용 React UI입니다.
 
 npm workspaces 기반 모노레포이며, 루트에서 의존성 설치·스크립트를 일괄 실행할 수 있습니다.
 
 ## 프로젝트 구조
 
 ```
-partner-center/
+waterbean/
 ├── api/                        # Express 백엔드 — TC 생성 파이프라인
 │   └── src/
 │       ├── agents/             #   Orchestrator · Registry · EventBus · Store · LLM 에이전트
@@ -138,7 +138,7 @@ npm run test -w api   # API: spec-risk 등 node:test 스위트
 리포지토리 루트에서 실행한다고 가정합니다. `fcws-sheet.json`은 프로젝트 루트에 두거나, `-v` 왼쪽 경로를 실제 키 파일 위치로 바꿉니다.
 
 ```bash
-docker build -t partner-center:test .
+docker build -t waterbean:test .
 
 docker run --rm -p 8080:8080 \
   -v "$(pwd)/api/.env:/run/secrets/app.env:ro" \
@@ -146,7 +146,7 @@ docker run --rm -p 8080:8080 \
   -e DOTENV_CONFIG_PATH=/run/secrets/app.env \
   -e GOOGLE_SERVICE_ACCOUNT_KEY_PATH=/secrets/fcws-sheet.json \
   -e API_PORT=8080 \
-  partner-center:test
+  waterbean:test
 ```
 
 `api/.env`의 `GOOGLE_SERVICE_ACCOUNT_KEY_PATH`가 로컬 상대경로(`../sa.json` 등)이면, 위처럼 `-e GOOGLE_SERVICE_ACCOUNT_KEY_PATH=/secrets/fcws-sheet.json`으로 컨테이너 안 경로를 덮어쓰는 편이 안전합니다. 마운트한 JSON 경로와 반드시 일치시키세요.
@@ -154,7 +154,7 @@ docker run --rm -p 8080:8080 \
 **이미지 빌드**
 
 ```bash
-docker build -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/partner-center:$(date -u +%Y%m%d%H%M%S)" .
+docker build -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/waterbean:$(date -u +%Y%m%d%H%M%S)" .
 ```
 
 **Secret Manager (예시)**
@@ -170,11 +170,11 @@ docker build -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/partner-ce
 
 ```bash
 TAG=$(date -u +%Y%m%d%H%M%S)
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/partner-center:${TAG}"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/waterbean:${TAG}"
 
 docker push "${IMAGE}"   # 또는 Cloud Build에서 빌드 후 동일 태그로 푸시
 
-gcloud run deploy partner-center \
+gcloud run deploy waterbean \
   --image "${IMAGE}" \
   --region "${REGION}" \
   --port 8080 \
@@ -195,6 +195,13 @@ gcloud run deploy partner-center \
 Cloud Run은 **`PORT`**를 자동 설정하며, `**GOOGLE_CLOUD_PROJECT`** 등 식별용 변수도 런타임에 제공됩니다. 앱은 `PORT`(또는 `API_PORT`)로 리슨합니다. 헬스 체크 URL은 `GET /health`입니다.
 
 Private npm 레지스트리(`.npmrc`)를 쓰는 경우, 이미지 빌드 환경에 인증(예: `NODE_AUTH_TOKEN`)을 주입해야 할 수 있습니다.
+
+### GitHub Actions
+
+- 배포: [.github/workflows/deploy-dev.yml](.github/workflows/deploy-dev.yml) — `workflow_dispatch`로 development / qa / staging을 고른 뒤 루트 [deploy.sh](deploy.sh)를 실행합니다. 저장소(또는 Environment) Secrets에 `DEV_GCP_CREDENTIALS`(JSON) 등이 필요합니다.
+- PR 라벨 규칙: [.github/pr-labeler.yml](.github/pr-labeler.yml) (이 설정을 쓰는 워크플로가 별도로 있어야 적용됩니다).
+
+워크플로 YAML은 GitHub이 **`.github/workflows/`** 디렉터리(이름이 **복수** `workflows`)에서만 자동으로 읽습니다. `.github/workflow/`(단수)에 두면 Actions에 나타나지 않습니다.
 
 ## 시스템 구성도
 

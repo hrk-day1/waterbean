@@ -1,5 +1,5 @@
 #!/bin/bash
-# Partner Center → Artifact Registry 빌드·푸시 후 Cloud Run 배포
+# waterbean 저장소 → Artifact Registry 빌드·푸시 후 Cloud Run 배포
 #
 # 필수 환경 변수 (예시는 주석 참고):
 #   GCP_LOCATION, GCP_PROJECT, GCP_VPC_NETWORK, GCP_VPC_SUBNET, GAR_REPOSITORY

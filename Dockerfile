@@ -1,4 +1,4 @@
-# Monorepo: API + Waterbean static (single Cloud Run service)
+# waterbean monorepo: API + Waterbean UI static (single Cloud Run service)
 FROM node:20-bookworm-slim AS build
 
 WORKDIR /app

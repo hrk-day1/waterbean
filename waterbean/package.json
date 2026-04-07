@@ -1,5 +1,5 @@
 {
-  "name": "@partner-center/waterbean",
+  "name": "@waterbean/waterbean",
   "private": true,
   "version": "0.0.0",
   "type": "module",
