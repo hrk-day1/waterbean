@@ -1,9 +1,11 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { usePipeline, useSkills } from "../controller/use-pipeline";
+import { fetchSourceSheetMeta, usePipeline, useSkills } from "../controller/use-pipeline";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Select } from "@/shared/ui/select";
+import { Slider } from "@/shared/ui/slider";
+import { Switch } from "@/shared/ui/switch";
 import { Card } from "@/shared/ui/card";
 import { StatsCards } from "./components/stats-cards";
 import { DistributionTable } from "./components/distribution-table";
@@ -13,66 +15,104 @@ import { RunProgressBanner } from "@/shared/ui/run-progress-banner";
 import { useAutoScrollBottom } from "@/shared/lib/use-auto-scroll-bottom";
 import { Info, Loader2 } from "lucide-react";
 
-const DOMAIN_KEYS = ["all", "auth", "payment", "content", "membership", "community", "creator", "admin"] as const;
-const DOMAIN_VALUES = ["ALL", "AUTH", "PAY", "CONTENT", "MEMBERSHIP", "COMMUNITY", "CREATOR", "ADMIN"] as const;
+const SHEETS_URL_HINT = /\/spreadsheets\/d\//;
 
-const FALLBACK_KEYS = ["0", "1", "2", "3"] as const;
-const MAX_TC_PER_REQ_KEYS = ["1", "2", "3", "4", "5", "6"] as const;
+function looksLikeSheetsUrl(s: string): boolean {
+  try {
+    const u = new URL(s.trim());
+    return u.protocol === "https:" && SHEETS_URL_HINT.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
 
 export function PipelinePage() {
   const { t } = useTranslation();
   const { run, loading, result, error, agents, statusMessage } = usePipeline();
   const skills = useSkills();
 
-  const domainOptions = useMemo(
-    () => DOMAIN_KEYS.map((key, i) => ({ value: DOMAIN_VALUES[i], label: t(`pipeline.domain.${key}`) })),
-    [t],
-  );
-
-  const fallbackOptions = useMemo(
-    () => FALLBACK_KEYS.map((key) => ({ value: key, label: t(`pipeline.fallback.${key}`) })),
-    [t],
-  );
-
-  const maxTcPerReqOptions = useMemo(
-    () =>
-      MAX_TC_PER_REQ_KEYS.map((key) => ({
-        value: key,
-        label: t(`pipeline.maxTcPerRequirement.${key}`, `${key} TC`),
-      })),
-    [t],
-  );
-
   const [url, setUrl] = useState("");
-  const [sheetName, setSheetName] = useState("QA_TC_Master");
-  const [domainMode, setDomainMode] = useState<"preset" | "discovered">("preset");
-  const [domain, setDomain] = useState("ALL");
+  const [sheetName, setSheetName] = useState("");
   const [owner, setOwner] = useState("TBD");
   const [env, setEnv] = useState("WEB-CHROME");
-  const [fallback, setFallback] = useState("2");
-  const [maxTcPerRequirement, setMaxTcPerRequirement] = useState("2");
-  const [skillId, setSkillId] = useState("default");
-  const [implementation, setImplementation] = useState<"deterministic" | "llm">("llm");
-  const [mergeSimilar, setMergeSimilar] = useState<"false" | "true">("false");
+  const [fallbackRounds, setFallbackRounds] = useState(2);
+  const [maxTcPerRequirement, setMaxTcPerRequirement] = useState(5);
+  const [skillId, setSkillId] = useState("sheet-grounded");
+  const [mergeSimilarTestCases, setMergeSimilarTestCases] = useState(false);
+  const [sheetMetaError, setSheetMetaError] = useState<string | null>(null);
+  const [sheetMetaLoading, setSheetMetaLoading] = useState(false);
+  const [submitSheetError, setSubmitSheetError] = useState(false);
+
+  const userEditedTargetSheet = useRef(false);
 
   const skillOptions = skills.map((s) => ({ value: s.id, label: s.name }));
 
+  useEffect(() => {
+    if (skills.length === 0) return;
+    const ids = new Set(skills.map((s) => s.id));
+    if (!ids.has(skillId)) {
+      const next = ids.has("sheet-grounded") ? "sheet-grounded" : skills[0]!.id;
+      setSkillId(next);
+    }
+  }, [skills, skillId]);
+
+  useEffect(() => {
+    userEditedTargetSheet.current = false;
+  }, [url]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const trimmed = url.trim();
+    if (!looksLikeSheetsUrl(trimmed)) {
+      setSheetMetaError(null);
+      setSheetMetaLoading(false);
+      return;
+    }
+
+    const tmr = window.setTimeout(() => {
+      void (async () => {
+        setSheetMetaLoading(true);
+        setSheetMetaError(null);
+        try {
+          const meta = await fetchSourceSheetMeta(trimmed);
+          if (cancelled) return;
+          if (!userEditedTargetSheet.current) {
+            setSheetName(meta.suggestedTargetSheetName);
+          }
+        } catch (e) {
+          if (!cancelled) {
+            setSheetMetaError(e instanceof Error ? e.message : t("pipeline.sheetMeta.error"));
+          }
+        } finally {
+          if (!cancelled) setSheetMetaLoading(false);
+        }
+      })();
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(tmr);
+    };
+  }, [url, t]);
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    setSubmitSheetError(false);
     if (!url.trim()) return;
+    if (!sheetName.trim()) {
+      setSubmitSheetError(true);
+      return;
+    }
 
     run({
       spreadsheetUrl: url.trim(),
-      targetSheetName: sheetName,
-      domainMode,
-      domainScope: domain,
+      targetSheetName: sheetName.trim(),
       ownerDefault: owner,
       environmentDefault: env,
-      maxTcPerRequirement: Number(maxTcPerRequirement),
-      maxFallbackRounds: Number(fallback),
+      maxTcPerRequirement,
+      maxFallbackRounds: fallbackRounds,
       skillId,
-      implementation,
-      mergeSimilarTestCases: mergeSimilar === "true",
+      mergeSimilarTestCases,
     });
   };
 
@@ -105,100 +145,99 @@ export function PipelinePage() {
             required
           />
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div>
             <Input
               id="sheetName"
               label={t("pipeline.label.sheetName")}
+              placeholder={t("pipeline.sheetName.placeholder")}
               value={sheetName}
-              onChange={(e) => setSheetName(e.target.value)}
-            />
-            <Select
-              id="domainMode"
-              label={t("pipeline.label.domainMode")}
-              options={[
-                { value: "preset", label: t("pipeline.domainMode.preset") },
-                { value: "discovered", label: t("pipeline.domainMode.discovered") },
-              ]}
-              value={domainMode}
               onChange={(e) => {
-                const m = e.target.value as "preset" | "discovered";
-                setDomainMode(m);
-                if (m === "discovered") setDomain("ALL");
+                userEditedTargetSheet.current = true;
+                setSheetName(e.target.value);
+                setSubmitSheetError(false);
               }}
+              aria-invalid={submitSheetError}
             />
-            <Select
-              id="domain"
-              label={t("pipeline.label.domainScope")}
-              options={domainOptions}
-              value={domain}
-              disabled={domainMode === "discovered"}
-              onChange={(e) => setDomain(e.target.value)}
-            />
-            <Select
-              id="fallback"
-              label={t("pipeline.label.fallbackRounds")}
-              options={fallbackOptions}
-              value={fallback}
-              onChange={(e) => setFallback(e.target.value)}
-            />
-            <Select
-              id="maxTcPerRequirement"
-              label={t("pipeline.label.maxTcPerRequirement")}
-              options={maxTcPerReqOptions}
-              value={maxTcPerRequirement}
-              onChange={(e) => setMaxTcPerRequirement(e.target.value)}
-            />
-          </div>
-          {domainMode === "discovered" && (
-            <p className="text-xs text-zinc-500">{t("pipeline.hint.discoveredRequiresAll")}</p>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Input
-              id="owner"
-              label={t("pipeline.label.owner")}
-              value={owner}
-              onChange={(e) => setOwner(e.target.value)}
-            />
-            <Input
-              id="env"
-              label={t("pipeline.label.environment")}
-              value={env}
-              onChange={(e) => setEnv(e.target.value)}
-            />
-            {skillOptions.length > 0 && (
-              <Select
-                id="skill"
-                label="Skill"
-                options={skillOptions}
-                value={skillId}
-                onChange={(e) => setSkillId(e.target.value)}
-              />
+            <div className="mt-1 flex min-h-[1.25rem] items-center gap-2 text-xs text-zinc-500">
+              {sheetMetaLoading && (
+                <span className="flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                  {t("pipeline.sheetMeta.loading")}
+                </span>
+              )}
+              {!sheetMetaLoading && sheetMetaError && (
+                <span className="text-danger">{sheetMetaError}</span>
+              )}
+              {!sheetMetaLoading && !sheetMetaError && sheetName && (
+                <span>{t("pipeline.sheetMeta.hint")}</span>
+              )}
+            </div>
+            {submitSheetError && (
+              <p className="mt-1 text-xs text-danger">{t("pipeline.sheetName.required")}</p>
             )}
-            <Select
-              id="implementation"
-              label={t("pipeline.label.implementation", "Engine")}
-              options={[
-                { value: "llm", label: "LLM (Gemini)" },
-                { value: "deterministic", label: t("pipeline.label.deterministic", "Rule-based") },
-              ]}
-              value={implementation}
-              onChange={(e) => setImplementation(e.target.value as "deterministic" | "llm")}
-            />
-            <Select
+          </div>
+
+          <div className="space-y-4 border-t border-border pt-5">
+            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              {t("pipeline.section.runOptions")}
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-3">
+              <Slider
+                id="fallback"
+                label={t("pipeline.label.fallbackRounds")}
+                min={0}
+                max={3}
+                value={fallbackRounds}
+                onValueChange={setFallbackRounds}
+                valueDescription={t(`pipeline.fallback.${fallbackRounds}` as const)}
+              />
+              <Slider
+                id="maxTcPerRequirement"
+                label={t("pipeline.label.maxTcPerRequirement")}
+                min={1}
+                max={6}
+                value={maxTcPerRequirement}
+                onValueChange={setMaxTcPerRequirement}
+                valueDescription={t(`pipeline.maxTcPerRequirement.${maxTcPerRequirement}` as const)}
+              />
+              {skillOptions.length > 0 && (
+                <Select
+                  id="skill"
+                  label="Skill"
+                  options={skillOptions}
+                  value={skillId}
+                  onChange={(e) => setSkillId(e.target.value)}
+                />
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Input
+                id="owner"
+                label={t("pipeline.label.owner")}
+                value={owner}
+                onChange={(e) => setOwner(e.target.value)}
+              />
+              <Input
+                id="env"
+                label={t("pipeline.label.environment")}
+                value={env}
+                onChange={(e) => setEnv(e.target.value)}
+              />
+            </div>
+
+            <Switch
               id="mergeSimilar"
               label={t("pipeline.label.mergeSimilarTestCases")}
-              options={[
-                { value: "false", label: t("pipeline.mergeSimilar.off") },
-                { value: "true", label: t("pipeline.mergeSimilar.on") },
-              ]}
-              value={mergeSimilar}
-              onChange={(e) => setMergeSimilar(e.target.value as "false" | "true")}
+              description={t("pipeline.mergeSimilar.hint")}
+              checked={mergeSimilarTestCases}
+              onCheckedChange={setMergeSimilarTestCases}
             />
           </div>
 
           <div className="flex justify-end">
-            <Button type="submit" disabled={loading || !url.trim()}>
+            <Button type="submit" disabled={loading || !url.trim() || !sheetName.trim()}>
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               {loading ? t("pipeline.button.running") : t("pipeline.button.run")}
             </Button>

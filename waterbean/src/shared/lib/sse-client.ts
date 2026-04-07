@@ -10,23 +10,13 @@ export interface AgentEvent {
   payload?: unknown;
 }
 
-type StreamKind = "pipeline" | "fork";
-
-function eventsUrl(kind: StreamKind, id: string): string {
-  if (kind === "pipeline") {
-    return `${BASE_URL}/pipeline/run/${id}/events`;
-  }
-  return `${BASE_URL}/pipeline/fork/${id}/events`;
-}
-
 function openEventSource(
-  kind: StreamKind,
-  id: string,
+  pipelineId: string,
   onEvent: (event: AgentEvent) => void,
   onComplete?: (result: unknown) => void,
   onStreamError?: () => void,
 ): () => void {
-  const es = new EventSource(eventsUrl(kind, id));
+  const es = new EventSource(`${BASE_URL}/pipeline/run/${pipelineId}/events`);
   let finished = false;
 
   es.onmessage = (e) => {
@@ -69,14 +59,5 @@ export function subscribeToPipelineEvents(
   onComplete?: (result: unknown) => void,
   onStreamError?: () => void,
 ): () => void {
-  return openEventSource("pipeline", pipelineId, onEvent, onComplete, onStreamError);
-}
-
-export function subscribeToForkEvents(
-  forkId: string,
-  onEvent: (event: AgentEvent) => void,
-  onComplete?: (result: unknown) => void,
-  onStreamError?: () => void,
-): () => void {
-  return openEventSource("fork", forkId, onEvent, onComplete, onStreamError);
+  return openEventSource(pipelineId, onEvent, onComplete, onStreamError);
 }

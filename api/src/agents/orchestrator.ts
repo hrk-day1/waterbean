@@ -6,6 +6,9 @@ import type {
   PipelineResult,
   TaxonomyEvaluationResult,
 } from "../types/pipeline.js";
+
+const IMPL: Implementation = "llm";
+const DOMAIN_SCOPE_ALL = "ALL" as const;
 import type { ChecklistItem, TestCase } from "../types/tc.js";
 import type { EvaluationResult } from "../types/pipeline.js";
 import { parseSpreadsheetUrl, findSheetName, readSheetValues } from "../sheets/reader.js";
@@ -93,17 +96,14 @@ export async function orchestrate(
   options?: { pipelineId?: string },
 ): Promise<PipelineResult & { pipelineId: string }> {
   const pipelineId = options?.pipelineId ?? crypto.randomUUID().slice(0, 8);
-  const impl: Implementation = config.implementation ?? "llm";
   const manifest = getSkill(config.skillId);
 
   createExecution(pipelineId, config as unknown as Record<string, unknown>);
 
-  console.log(
-    `[orchestrator] pipeline=${pipelineId} impl=${impl} skill=${manifest.id} domainMode=${config.domainMode ?? "preset"}`,
-  );
+  console.log(`[orchestrator] pipeline=${pipelineId} impl=llm skill=${manifest.id} taxonomy=always`);
 
   try {
-    return await runOrchestrationBody(pipelineId, config, impl, manifest);
+    return await runOrchestrationBody(pipelineId, config, manifest);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[orchestrator] pipeline=${pipelineId} failed:`, err);
@@ -125,7 +125,6 @@ export async function orchestrate(
 async function runOrchestrationBody(
   pipelineId: string,
   config: PipelineConfig,
-  impl: Implementation,
   manifest: ReturnType<typeof getSkill>,
 ): Promise<PipelineResult & { pipelineId: string }> {
   const { spreadsheetId, gid } = parseSpreadsheetUrl(config.spreadsheetUrl);
@@ -139,59 +138,63 @@ async function runOrchestrationBody(
     throw new Error(`Source sheet '${sourceSheetName}' has no data rows`);
   }
 
-  const agentConfig = { pipelineId, skillId: config.skillId, domainScope: config.domainScope, implementation: impl };
+  const agentConfig = {
+    pipelineId,
+    skillId: config.skillId,
+    domainScope: DOMAIN_SCOPE_ALL,
+    implementation: IMPL,
+  };
+
+  if (!env.geminiApiKey) {
+    throw new Error("Pipeline requires GEMINI_API_KEY (Taxonomy + LLM agents)");
+  }
 
   let resolved = skillManifestToResolved(manifest);
-  if (config.domainMode === "discovered") {
-    if (!env.geminiApiKey) {
-      throw new Error("domainMode 'discovered' requires GEMINI_API_KEY in environment");
+  const { headers, dataRows } = detectHeaderAndData(raw);
+  const sampleRows = dataRows.slice(0, 30);
+  const maxTaxonomyRetries = 2;
+  const taxEvalAgent = getAgent<TaxonomyEvaluatorInput, TaxonomyEvaluationResult>("taxonomy-evaluator", IMPL);
+
+  for (let attempt = 0; attempt <= maxTaxonomyRetries; attempt++) {
+    resolved = await runTaxonomyPhase(
+      { headers, sampleRows, sourceSheetName, baseSkill: manifest },
+      eventBus,
+      pipelineId,
+    );
+
+    const taxEvalResult = await taxEvalAgent.run(
+      { resolvedSkill: resolved, headers, sampleRows },
+      eventBus,
+      agentConfig,
+    );
+
+    if (taxEvalResult.data?.passed) {
+      updateAgentState(pipelineId, {
+        agentId: taxEvalResult.agentId, agentType: "taxonomy-evaluator",
+        status: "completed", progress: 100,
+        message: "Taxonomy 검증 통과", durationMs: taxEvalResult.durationMs,
+      });
+      break;
     }
-    const { headers, dataRows } = detectHeaderAndData(raw);
-    const sampleRows = dataRows.slice(0, 30);
-    const maxTaxonomyRetries = 2;
-    const taxEvalAgent = getAgent<TaxonomyEvaluatorInput, TaxonomyEvaluationResult>("taxonomy-evaluator", impl);
 
-    for (let attempt = 0; attempt <= maxTaxonomyRetries; attempt++) {
-      resolved = await runTaxonomyPhase(
-        { headers, sampleRows, sourceSheetName, baseSkill: manifest },
-        eventBus,
-        pipelineId,
-      );
+    const issueCount = taxEvalResult.data?.issues.length ?? 0;
+    console.log(
+      `[orchestrator] taxonomy-eval attempt ${attempt + 1}/${maxTaxonomyRetries + 1}: ${issueCount} issues`,
+    );
 
-      const taxEvalResult = await taxEvalAgent.run(
-        { resolvedSkill: resolved, headers, sampleRows },
-        eventBus,
-        agentConfig,
-      );
-
-      if (taxEvalResult.data?.passed) {
-        updateAgentState(pipelineId, {
-          agentId: taxEvalResult.agentId, agentType: "taxonomy-evaluator",
-          status: "completed", progress: 100,
-          message: "Taxonomy 검증 통과", durationMs: taxEvalResult.durationMs,
-        });
-        break;
-      }
-
-      const issueCount = taxEvalResult.data?.issues.length ?? 0;
-      console.log(
-        `[orchestrator] taxonomy-eval attempt ${attempt + 1}/${maxTaxonomyRetries + 1}: ${issueCount} issues`,
-      );
-
-      if (attempt === maxTaxonomyRetries) {
-        updateAgentState(pipelineId, {
-          agentId: taxEvalResult.agentId, agentType: "taxonomy-evaluator",
-          status: "completed", progress: 100,
-          message: `Taxonomy 검증 미통과 (${issueCount}건), 현재 결과로 계속 진행`,
-          durationMs: taxEvalResult.durationMs,
-        });
-        console.warn(`[orchestrator] taxonomy-eval failed after ${maxTaxonomyRetries + 1} attempts, proceeding with current taxonomy`);
-      }
+    if (attempt === maxTaxonomyRetries) {
+      updateAgentState(pipelineId, {
+        agentId: taxEvalResult.agentId, agentType: "taxonomy-evaluator",
+        status: "completed", progress: 100,
+        message: `Taxonomy 검증 미통과 (${issueCount}건), 현재 결과로 계속 진행`,
+        durationMs: taxEvalResult.durationMs,
+      });
+      console.warn(`[orchestrator] taxonomy-eval failed after ${maxTaxonomyRetries + 1} attempts, proceeding with current taxonomy`);
     }
   }
 
   // --- Plan ---
-  const planAgent = getAgent<PlanInput, ChecklistItem[]>("plan", impl);
+  const planAgent = getAgent<PlanInput, ChecklistItem[]>("plan", IMPL);
 
   const planResult = await planAgent.run(
     { raw, sourceSheetName, resolvedSkill: resolved },
@@ -210,13 +213,10 @@ async function runOrchestrationBody(
   });
 
   const fullChecklist = planResult.data;
-  const scopedChecklist =
-    config.domainScope === "ALL"
-      ? fullChecklist
-      : fullChecklist.filter((c) => c.domain.toUpperCase() === config.domainScope);
+  const scopedChecklist = fullChecklist;
 
   if (scopedChecklist.length === 0) {
-    throw new Error(`No checklist items match domain scope '${config.domainScope}'`);
+    throw new Error("Plan produced an empty checklist");
   }
 
   const debugRoot = resolvePipelineDebugRoot(env.pipelineDebugDir);
@@ -226,11 +226,11 @@ async function runOrchestrationBody(
     await writePipelineDebugJson(debugRoot, pipelineId, "plan/meta.json", {
       savedAt: new Date().toISOString(),
       pipelineId,
-      domainScope: config.domainScope,
+      domainScope: DOMAIN_SCOPE_ALL,
       sourceSheetName,
       targetSheetName: config.targetSheetName,
       skillId: config.skillId,
-      implementation: impl,
+      implementation: IMPL,
       fullChecklistCount: fullChecklist.length,
       scopedChecklistCount: scopedChecklist.length,
       planDurationMs: planResult.durationMs,
@@ -243,8 +243,8 @@ async function runOrchestrationBody(
   await writeHeaders(spreadsheetId, sheetName);
 
   // --- Batch loop: generator만 (Evaluator는 전체 완료 후 1회) ---
-  const genAgent = getAgent<GeneratorInput, TestCase[]>("generator", impl);
-  const evalAgent = getAgent<EvaluatorInput, EvaluationResult>("evaluator", impl);
+  const genAgent = getAgent<GeneratorInput, TestCase[]>("generator", IMPL);
+  const evalAgent = getAgent<EvaluatorInput, EvaluationResult>("evaluator", IMPL);
   const genConfig = {
     ownerDefault: config.ownerDefault,
     environmentDefault: config.environmentDefault,
@@ -499,7 +499,7 @@ async function runOrchestrationBody(
 
   // --- Merge (optional, 전체 TC 대상) ---
   if (config.mergeSimilarTestCases) {
-    const mergeAgent = getAgent<MergeInput, TestCase[]>("merge", impl);
+    const mergeAgent = getAgent<MergeInput, TestCase[]>("merge", IMPL);
     const mergeResult = await mergeAgent.run(
       { testCases: allTestCases },
       eventBus,

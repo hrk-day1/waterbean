@@ -2,8 +2,6 @@ import type { ChecklistItem, Priority, TestCase, TcType } from "./tc.js";
 
 export type Implementation = "deterministic" | "llm";
 
-export type DomainMode = "preset" | "discovered";
-
 /** 결정적 Generator의 도메인 최소 세트 보완 TC를 어느 체크리스트 행에 부착할지 */
 export type DomainMinSetFillMode = "round_robin" | "representative" | "off";
 
@@ -20,9 +18,6 @@ export interface PipelineConfig {
   sourceSheetName?: string;
   sourceGid?: string;
   targetSheetName: string;
-  /** preset: 기존 스킬 7도메인 / discovered: Taxonomy LLM으로 동적 도메인 (MVP는 domainScope ALL만) */
-  domainMode?: DomainMode;
-  domainScope: "ALL" | "AUTH" | "PAY" | "CONTENT" | "MEMBERSHIP" | "COMMUNITY" | "CREATOR" | "ADMIN";
   ownerDefault: string;
   environmentDefault: string;
   maxTcPerRequirement?: number;
@@ -30,7 +25,6 @@ export interface PipelineConfig {
   highRiskMaxTcPerRequirement?: number;
   maxFallbackRounds: number;
   skillId: string;
-  implementation?: Implementation;
   maxLlmRounds?: number;
   mergeSimilarTestCases?: boolean;
   /** 기본 round_robin. off면 보완 TC 생략(도메인 최소 세트 Evaluator 이슈 가능) */

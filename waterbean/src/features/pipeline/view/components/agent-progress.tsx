@@ -92,20 +92,15 @@ export function AgentProgress({ agents }: AgentProgressProps) {
           const color = STATUS_COLORS[agent.status];
           const isOrchestrator = agent.agentId === "orchestrator";
           const detail = isOrchestrator ? formatOrchestratorPayload(agent.payload, t) : null;
-          const label =
-            agent.agentId === "fork-root"
-              ? t("fork.agentProgress.root")
-              : agent.agentId.startsWith("fork-")
-                ? t("fork.agentProgress.variant", { label: agent.agentId.slice(5) })
-                : isOrchestrator
-                  ? t("pipeline.agentProgress.orchestrator")
-                  : agent.agentType === "taxonomy"
-                    ? t("pipeline.agentProgress.taxonomy")
-                    : agent.agentType === "taxonomy-evaluator"
-                      ? t("pipeline.agentProgress.taxonomyEvaluator")
-                      : agent.agentType === "merge"
-                        ? t("pipeline.agentProgress.merge")
-                        : (AGENT_LABELS[agent.agentType] ?? agent.agentType);
+          const label = isOrchestrator
+            ? t("pipeline.agentProgress.orchestrator")
+            : agent.agentType === "taxonomy"
+              ? t("pipeline.agentProgress.taxonomy")
+              : agent.agentType === "taxonomy-evaluator"
+                ? t("pipeline.agentProgress.taxonomyEvaluator")
+                : agent.agentType === "merge"
+                  ? t("pipeline.agentProgress.merge")
+                  : (AGENT_LABELS[agent.agentType] ?? agent.agentType);
 
           return (
             <div key={agent.agentId} className="flex items-center gap-3">

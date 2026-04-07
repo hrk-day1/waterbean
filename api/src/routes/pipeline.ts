@@ -2,48 +2,61 @@ import crypto from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { runPipeline } from "../pipeline/runner.js";
-import { runFork } from "../pipeline/fork-runner.js";
 import { listSkills } from "../skills/registry.js";
 import { orchestrate } from "../agents/orchestrator.js";
 import { eventBus } from "../agents/event-bus.js";
 import { getExecution } from "../agents/store.js";
 import { listAgents } from "../agents/registry.js";
 import { formatLlmJsonFailureForUi, LlmJsonParseError } from "../llm/gemini-client.js";
+import { parseSpreadsheetUrl, findSheetName } from "../sheets/reader.js";
+import { buildSuggestedTcSheetName } from "../sheets/sheet-name-utils.js";
 
 export const pipelineRouter = Router();
 
-const RunRequestSchema = z
-  .object({
-    spreadsheetUrl: z.string().url(),
-    sourceSheetName: z.string().optional(),
-    sourceGid: z.string().optional(),
-    targetSheetName: z.string().default("QA_TC_Master"),
-    domainMode: z.enum(["preset", "discovered"]).default("preset"),
-    domainScope: z
-      .enum(["ALL", "AUTH", "PAY", "CONTENT", "MEMBERSHIP", "COMMUNITY", "CREATOR", "ADMIN"])
-      .default("ALL"),
-    ownerDefault: z.string().default("TBD"),
-    environmentDefault: z.string().default("WEB-CHROME"),
-    maxTcPerRequirement: z.number().int().positive().optional(),
-    highRiskMaxTcPerRequirement: z.number().int().positive().optional(),
-    maxFallbackRounds: z.number().int().min(0).max(5).default(2),
-    skillId: z.string().default("default"),
-    implementation: z.enum(["deterministic", "llm"]).default("llm"),
-    maxLlmRounds: z.number().int().min(0).max(5).default(3),
-    mergeSimilarTestCases: z.boolean().default(false),
-    domainMinSetFill: z.enum(["round_robin", "representative", "off"]).optional(),
-    evalSpecGrounding: z.enum(["off", "warn", "block"]).optional(),
-    evalTraceability: z.enum(["off", "warn", "block"]).optional(),
-  })
-  .superRefine((val, ctx) => {
-    if (val.domainMode === "discovered" && val.domainScope !== "ALL") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "domainMode 'discovered'일 때 domainScope는 ALL만 허용됩니다.",
-        path: ["domainScope"],
-      });
-    }
-  });
+const RunRequestSchema = z.object({
+  spreadsheetUrl: z.string().url(),
+  sourceSheetName: z.string().optional(),
+  sourceGid: z.string().optional(),
+  targetSheetName: z.string().min(1, "targetSheetName is required"),
+  ownerDefault: z.string().default("TBD"),
+  environmentDefault: z.string().default("WEB-CHROME"),
+  maxTcPerRequirement: z.number().int().positive().optional(),
+  highRiskMaxTcPerRequirement: z.number().int().positive().optional(),
+  maxFallbackRounds: z.number().int().min(0).max(5).default(2),
+  skillId: z.string().default("sheet-grounded"),
+  maxLlmRounds: z.number().int().min(0).max(5).default(3),
+  mergeSimilarTestCases: z.boolean().default(false),
+  domainMinSetFill: z.enum(["round_robin", "representative", "off"]).optional(),
+  evalSpecGrounding: z.enum(["off", "warn", "block"]).optional(),
+  evalTraceability: z.enum(["off", "warn", "block"]).optional(),
+});
+
+pipelineRouter.get("/source-sheet", async (req, res) => {
+  const url = typeof req.query.url === "string" ? req.query.url.trim() : "";
+  if (!url) {
+    res.status(400).json({ error: "Missing url query parameter" });
+    return;
+  }
+  let parsed: { spreadsheetId: string; gid?: string };
+  try {
+    parsed = parseSpreadsheetUrl(url);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Invalid spreadsheet URL";
+    res.status(400).json({ error: msg });
+    return;
+  }
+  try {
+    const sourceSheetName = await findSheetName(parsed.spreadsheetId, {
+      gid: parsed.gid ?? undefined,
+    });
+    const suggestedTargetSheetName = buildSuggestedTcSheetName(sourceSheetName);
+    res.json({ sourceSheetName, suggestedTargetSheetName });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Failed to resolve sheet";
+    console.error("[pipeline/source-sheet]", e);
+    res.status(502).json({ error: msg });
+  }
+});
 
 pipelineRouter.get("/skills", (_req, res) => {
   const skills = listSkills();
@@ -174,83 +187,4 @@ pipelineRouter.post("/notify", (req, res) => {
     message:
       "Phase C skeleton: outbound webhook not implemented. Subscribe via SSE or poll GET /pipeline/run/:id/result.",
   });
-});
-
-const ForkVariantSchema = z.object({
-  label: z.string().min(1),
-  skillId: z.string().default("default"),
-  domainMode: z.enum(["preset", "discovered"]).default("preset"),
-  domainScope: z.enum(["ALL", "AUTH", "PAY", "CONTENT", "MEMBERSHIP", "COMMUNITY", "CREATOR", "ADMIN"]).default("ALL"),
-  maxFallbackRounds: z.number().int().min(0).max(5).default(2),
-});
-
-const ForkRequestSchema = z
-  .object({
-    spreadsheetUrl: z.string().url(),
-    baseSheetName: z.string().default("QA_TC_Fork"),
-    ownerDefault: z.string().default("TBD"),
-    environmentDefault: z.string().default("WEB-CHROME"),
-    maxTcPerRequirement: z.number().int().positive().optional(),
-    highRiskMaxTcPerRequirement: z.number().int().positive().optional(),
-    variants: z.array(ForkVariantSchema).min(2).max(5),
-  })
-  .superRefine((data, ctx) => {
-    data.variants.forEach((v, i) => {
-      if (v.domainMode === "discovered" && v.domainScope !== "ALL") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "domainMode 'discovered'일 때 domainScope는 ALL만 허용됩니다.",
-          path: ["variants", i, "domainScope"],
-        });
-      }
-    });
-  });
-
-pipelineRouter.post("/fork", async (req, res) => {
-  const parsed = ForkRequestSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
-
-  try {
-    const result = await runFork(parsed.data);
-    res.json(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[fork] error:", err);
-    res.status(500).json({ error: message });
-  }
-});
-
-pipelineRouter.post("/fork/async", (req, res) => {
-  const parsed = ForkRequestSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
-
-  const forkId = crypto.randomUUID().slice(0, 8);
-  void runFork(parsed.data, { forkId, emitProgress: true }).catch((err) => {
-    console.error("[fork/async] error:", err);
-  });
-
-  res.json({ forkId, status: "started" });
-});
-
-pipelineRouter.get("/fork/:forkId/events", (req, res) => {
-  attachProgressSse(res, req, req.params.forkId);
-});
-
-pipelineRouter.get("/fork/:forkId/result", (req, res) => {
-  const exec = getExecution(req.params.forkId);
-  if (!exec) {
-    res.status(404).json({ error: "Fork run not found" });
-    return;
-  }
-  if (!exec.completedAt) {
-    res.status(202).json({ status: "running", agents: exec.agents });
-    return;
-  }
-  res.json(exec.result);
 });

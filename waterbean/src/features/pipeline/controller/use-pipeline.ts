@@ -46,16 +46,22 @@ export interface PipelineResult {
 export interface PipelineRequest {
   spreadsheetUrl: string;
   targetSheetName: string;
-  domainMode?: "preset" | "discovered";
-  domainScope: string;
   ownerDefault: string;
   environmentDefault: string;
   /** 요구사항(Requirement_ID)당 생성 TC 상한. API `maxTcPerRequirement`에 매핑 */
   maxTcPerRequirement: number;
   maxFallbackRounds: number;
   skillId: string;
-  implementation?: "deterministic" | "llm";
   mergeSimilarTestCases?: boolean;
+}
+
+export interface SourceSheetMeta {
+  sourceSheetName: string;
+  suggestedTargetSheetName: string;
+}
+
+export function fetchSourceSheetMeta(url: string): Promise<SourceSheetMeta> {
+  return apiGet<SourceSheetMeta>(`/pipeline/source-sheet?url=${encodeURIComponent(url)}`);
 }
 
 export interface SkillSummary {
