@@ -1,6 +1,6 @@
 # Partner Center
 
-Google Sheets 기능 목록으로부터 QA Test Case를 자동 생성하는 도구입니다.
+Google Sheets 기능 목록으로부터 QA Test Case를 자동 생성하는 도구입니다. **Express API**가 파이프라인(Plan · Taxonomy · Generator · Evaluator 등)을 수행하고, **waterbean**은 파이프라인·Fork 실행과 SSE 모니터링용 React UI입니다.
 
 ## 프로젝트 구조
 
@@ -16,7 +16,6 @@ partner-center/
 │       ├── sheets/             #   Sheets 읽기 · 쓰기
 │       ├── skills/             #   스킬 프리셋 (도메인 키워드 · TC 템플릿)
 │       └── types/              #   타입 정의 (Pipeline, TC, Fork)
-├── web/                        # React SPA — Partner Center Web (Vite 기본 포트)
 ├── waterbean/                  # React SPA — TC Harness (파이프라인 / Fork UI, :5174)
 │   └── src/
 │       ├── features/
@@ -29,7 +28,6 @@ partner-center/
 | 워크스페이스 | 포트 | 스택 | 설명 |
 |---|---|---|---|
 | `api` | 4000 | Express 5 · Google Sheets API · Gemini AI · Zod | TC 생성 파이프라인 API 서버 |
-| `web` | 5173 (기본) | React · Vite · Tailwind | Partner Center Web |
 | `waterbean` | 5174 | React 19 · Vite 8 · Tailwind 4 | Pipeline / Fork 실행 UI |
 
 ## 시작하기
@@ -71,12 +69,11 @@ cp api/.env.example api/.env
 ### 개발 서버 실행
 
 ```bash
-# 전체: API가 /health 로 준비된 뒤 web + waterbean 동시 기동
+# 전체: API가 /health 로 준비된 뒤, 루트 package.json workspaces에 정의된 클라이언트 dev 스크립트를 병렬 기동
 npm run dev
 
 # 개별 실행
 npm run dev:api        # API (:4000)
-npm run dev:web        # Web (Vite 기본 포트)
 npm run dev:waterbean  # Waterbean (:5174)
 ```
 
