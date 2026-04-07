@@ -18,8 +18,16 @@ function parseEvaluatorGate(raw: string | undefined): EvaluatorGateMode | undefi
   return undefined;
 }
 
+function parseListenPort(): number {
+  const fromApi = Number(process.env.API_PORT);
+  if (Number.isFinite(fromApi) && fromApi > 0) return fromApi;
+  const legacy = Number(process.env.PORT);
+  if (Number.isFinite(legacy) && legacy > 0) return legacy;
+  return 4000;
+}
+
 export const env = {
-  port: Number(process.env.PORT) || 4000,
+  port: parseListenPort(),
   saKeyPath: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || "../sa.json",
 
   geminiApiKey: process.env.GEMINI_API_KEY || "",
